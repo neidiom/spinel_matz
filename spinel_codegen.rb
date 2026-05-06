@@ -30410,6 +30410,110 @@ class Compiler
     end
   end
 
+  # Helper for method-level begin/rescue: compiles the statements of a
+  # body, emitting all-but-last as stmts and assigning the last expr's
+  # value into ret_tmp. Used so that `def f; X; rescue; Y; end` returns
+  # X's value on the success path and Y's value on the rescue path.
+  def compile_body_into(body_id, ret_tmp, return_type)
+    if body_id < 0
+      return
+    end
+    stmts = get_stmts(body_id)
+    if stmts.length == 0
+      return
+    end
+    i = 0
+    while i < stmts.length - 1
+      compile_stmt(stmts[i])
+      i = i + 1
+    end
+    last = stmts.last
+    lt = @nd_type[last]
+    if lt == "ReturnNode" || lt == "WhileNode" || lt == "UntilNode" || lt == "BreakNode" || lt == "NextNode"
+      compile_stmt(last)
+      return
+    end
+    if return_type == "void"
+      compile_stmt(last)
+      return
+    end
+    # IO-shaped intrinsics (puts/print/p/printf/warn/pp) have no
+    # expression form in spinel codegen — compile_call_expr would
+    # warn "cannot resolve" and return the literal "0", silently
+    # dropping the side effect. Force statement form for these.
+    if lt == "CallNode" && @nd_receiver[last] < 0
+      cn = @nd_name[last]
+      if cn == "puts" || cn == "print" || cn == "p" || cn == "pp" || cn == "printf" || cn == "warn"
+        compile_stmt(last)
+        return
+      end
+    end
+    expr = compile_expr(last)
+    emit("  " + ret_tmp + " = " + expr + ";")
+  end
+
+  # Mirror of compile_rescue_chain that captures the rescue body's last
+  # expression into ret_tmp instead of dropping it. Used by the
+  # method-level BeginNode arm in compile_body_return.
+  def compile_rescue_chain_into(rc, ret_tmp, return_type)
+    exc_types = parse_id_list(@nd_exceptions[rc])
+    ref = @nd_reference[rc]
+    # Snapshot the in-flight exception BEFORE the type-check `if` so
+    # the else-branch (re-raise / propagation) can also reference it.
+    @rescue_depth = @rescue_depth + 1
+    saved_cls = "_rescue_cls_" + @rescue_depth.to_s
+    saved_msg = "_rescue_msg_" + @rescue_depth.to_s
+    emit("  const char *" + saved_cls + " = (const char *)sp_last_exc_cls;")
+    emit("  const char *" + saved_msg + " = sp_exc_msg[sp_exc_top];")
+    @rescue_cls_stack.push(saved_cls)
+    @rescue_msg_stack.push(saved_msg)
+    has_type_check = 0
+    if exc_types.length > 0
+      has_type_check = 1
+      cond = ""
+      k = 0
+      while k < exc_types.length
+        if k > 0
+          cond = cond + " || "
+        end
+        cond = cond + "sp_exc_is_a((const char*)sp_last_exc_cls, \"" + @nd_name[exc_types[k]] + "\")"
+        k = k + 1
+      end
+      emit("  if (" + cond + ") {")
+      @indent = @indent + 1
+    end
+    bound_rname = ""
+    if ref >= 0
+      bound_rname = @nd_name[ref]
+      emit("  lv_" + bound_rname + " = " + saved_msg + ";")
+      @exc_var_names.push(bound_rname)
+      @exc_var_cls_vars.push(saved_cls)
+    end
+    compile_body_into(@nd_body[rc], ret_tmp, return_type)
+    if bound_rname != ""
+      @exc_var_names.pop
+      @exc_var_cls_vars.pop
+    end
+    @rescue_cls_stack.pop
+    @rescue_msg_stack.pop
+    @rescue_depth = @rescue_depth - 1
+    if has_type_check == 1
+      @indent = @indent - 1
+      sub = @nd_subsequent[rc]
+      if sub >= 0
+        emit("  } else {")
+        @indent = @indent + 1
+        compile_rescue_chain_into(sub, ret_tmp, return_type)
+        @indent = @indent - 1
+      else
+        emit("  } else {")
+        emit("    sp_raise_cls(" + saved_cls + ", " + saved_msg + ");")
+      end
+      emit("  }")
+    end
+    0
+  end
+
   def compile_body_return(body_id, return_type)
     if body_id < 0
       if return_type != "void"
@@ -30462,9 +30566,53 @@ class Compiler
       return
     end
     if @nd_type[last] == "BeginNode"
-      compile_begin_stmt(last)
+      rc_id = @nd_rescue_clause[last]
+      ec_id = @nd_ensure_clause[last]
+      has_rescue_local = 0
+      if rc_id >= 0
+        has_rescue_local = 1
+      end
+      has_retry_local = 0
+      if has_rescue_local == 1 && body_has_retry(@nd_body[rc_id]) == 1
+        has_retry_local = 1
+      end
+      if has_rescue_local == 0 || has_retry_local == 1 || ec_id >= 0
+        # No rescue / has retry / has ensure: fall back to legacy stmt-form.
+        # compile_begin_stmt's 2-setjmp ensure pattern correctly replays the
+        # ensure body on both the explicit-return path and the propagation
+        # path; the return-value-capture form below uses a single setjmp and
+        # would skip ensure on explicit returns out of the rescue body.
+        compile_begin_stmt(last)
+        if return_type != "void"
+          emit("  return " + c_return_default(return_type) + ";")
+        end
+        return
+      end
+      # Method-level begin/rescue with return-value capture: bind the
+      # last expression of the begin body and of each rescue body into
+      # a return slot, then return the slot after the optional ensure.
+      @needs_setjmp = 1
+      ret_tmp = new_temp
       if return_type != "void"
-        emit("  return " + c_return_default(return_type) + ";")
+        emit("  " + c_type(return_type) + " " + ret_tmp + " = " + c_default_val(return_type) + ";")
+      end
+      emit("  sp_exc_top++;")
+      emit("  if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) {")
+      @indent = @indent + 1
+      compile_body_into(@nd_body[last], ret_tmp, return_type)
+      emit("  sp_exc_top--;")
+      @indent = @indent - 1
+      emit("  } else {")
+      @indent = @indent + 1
+      emit("  sp_exc_top--;")
+      compile_rescue_chain_into(rc_id, ret_tmp, return_type)
+      @indent = @indent - 1
+      emit("  }")
+      if ec_id >= 0
+        compile_stmts_body(@nd_body[ec_id])
+      end
+      if return_type != "void"
+        emit("  return " + ret_tmp + ";")
       end
       return
     end
