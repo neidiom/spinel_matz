@@ -1030,20 +1030,9 @@ class Compiler
   # `def m(&b); ...; end` shape (instance_eval trampoline today;
   # extensible to instance_exec, tap, etc.).
   def cls_method_sole_proc_param_name(ci, midx)
-    all_params = @cls_meth_params[ci].split("|")
-    all_ptypes = @cls_meth_ptypes[ci].split("|")
-    if midx >= all_params.length
-      return ""
-    end
-    if midx >= all_ptypes.length
-      return ""
-    end
-    pnames = all_params[midx].split(",")
-    ptypes = all_ptypes[midx].split(",")
-    if pnames.length != 1
-      return ""
-    end
-    if ptypes.length != 1
+    pnames = cls_meth_pnames_get(ci, midx)
+    ptypes = cls_meth_ptypes_get(ci, midx)
+    if pnames.length != 1 || ptypes.length != 1
       return ""
     end
     if ptypes[0] != "proc"
@@ -6501,21 +6490,13 @@ class Compiler
     while ci < @cls_names.length
       @current_class_idx = ci
       bodies = @cls_meth_bodies[ci].split(";")
-      all_params = @cls_meth_params[ci].split("|")
-      all_ptypes = @cls_meth_ptypes[ci].split("|")
       bj = 0
       while bj < bodies.length
         bid = bodies[bj].to_i
         if bid >= 0
           push_scope
-          pnames = "".split(",")
-          ptypes = "".split(",")
-          if bj < all_params.length
-            pnames = all_params[bj].split(",")
-          end
-          if bj < all_ptypes.length
-            ptypes = all_ptypes[bj].split(",")
-          end
+          pnames = cls_meth_pnames_get(ci, bj)
+          ptypes = cls_meth_ptypes_get(ci, bj)
           k = 0
           while k < pnames.length
             pt = "int"
@@ -10553,53 +10534,11 @@ class Compiler
                   args_id = @nd_arguments[nid]
                   if args_id >= 0
                     arg_ids = get_args(args_id)
-                    all_ptypes = @cls_meth_ptypes[init_ci].split("|")
-                    all_params = @cls_meth_params[init_ci].split("|")
-                    if init_idx < all_ptypes.length
-                      ptypes = all_ptypes[init_idx].split(",")
-                      pnames = "".split(",")
-                      if init_idx < all_params.length
-                        pnames = all_params[init_idx].split(",")
-                      end
-                      k = 0
-                      while k < arg_ids.length
-                        if @nd_type[arg_ids[k]] == "KeywordHashNode"
-                          # Handle keyword args
-                          elems = parse_id_list(@nd_elements[arg_ids[k]])
-                          ek = 0
-                          while ek < elems.length
-                            if @nd_type[elems[ek]] == "AssocNode"
-                              key_id = @nd_key[elems[ek]]
-                              if key_id >= 0
-                                kname = ""
-                                if @nd_type[key_id] == "SymbolNode"
-                                  kname = @nd_content[key_id]
-                                end
-                                expr_id = @nd_expression[elems[ek]]
-                                at = infer_type(expr_id)
-                                pi = 0
-                                while pi < pnames.length
-                                  if pnames[pi] == kname
-                                    if pi < ptypes.length
-                                      ptypes[pi] = unify_call_types(ptypes[pi], at, expr_id)
-                                    end
-                                  end
-                                  pi = pi + 1
-                                end
-                              end
-                            end
-                            ek = ek + 1
-                          end
-                        else
-                          at = infer_type(arg_ids[k])
-                          if k < ptypes.length
-                            ptypes[k] = unify_call_types(ptypes[k], at, arg_ids[k])
-                          end
-                        end
-                        k = k + 1
-                      end
-                      all_ptypes[init_idx] = ptypes.join(",")
-                      @cls_meth_ptypes[init_ci] = all_ptypes.join("|")
+                    ptypes = cls_meth_ptypes_get(init_ci, init_idx)
+                    if ptypes.length > 0
+                      pnames = cls_meth_pnames_get(init_ci, init_idx)
+                      widen_ptypes_from_args(arg_ids, pnames, ptypes)
+                      cls_meth_ptypes_put(init_ci, init_idx, ptypes)
                     end
                   end
                 end
@@ -11041,17 +10980,8 @@ class Compiler
         if init_idx2 < bodies.length
           if bodies[init_idx2].to_i == -2
             # Synthetic struct - update ivar types from init param types
-            all_params = @cls_meth_params[i].split("|")
-            all_ptypes = @cls_meth_ptypes[i].split("|")
-            pnames = "".split(",")
-            ptypes = "".split(",")
-
-            if init_idx2 < all_params.length
-              pnames = all_params[init_idx2].split(",")
-            end
-            if init_idx2 < all_ptypes.length
-              ptypes = all_ptypes[init_idx2].split(",")
-            end
+            pnames = cls_meth_pnames_get(i, init_idx2)
+            ptypes = cls_meth_ptypes_get(i, init_idx2)
             pk = 0
             while pk < pnames.length
               iname = "@" + pnames[pk]
@@ -11074,17 +11004,8 @@ class Compiler
       mi = 0
       while mi < mnames.length
         init_idx = mi
-        all_params = @cls_meth_params[i].split("|")
-        all_ptypes = @cls_meth_ptypes[i].split("|")
-        pnames = "".split(",")
-        ptypes = "".split(",")
-
-        if init_idx < all_params.length
-          pnames = all_params[init_idx].split(",")
-        end
-        if init_idx < all_ptypes.length
-          ptypes = all_ptypes[init_idx].split(",")
-        end
+        pnames = cls_meth_pnames_get(i, init_idx)
+        ptypes = cls_meth_ptypes_get(i, init_idx)
         bodies = @cls_meth_bodies[i].split(";")
         bid = -1
         if init_idx < bodies.length
@@ -11141,21 +11062,12 @@ class Compiler
     oci = 0
     while oci < @cls_names.length
       mnames = @cls_meth_names[oci].split(";")
-      all_params = @cls_meth_params[oci].split("|")
-      all_ptypes = @cls_meth_ptypes[oci].split("|")
       bodies = @cls_meth_bodies[oci].split(";")
       j = 0
       while j < mnames.length
         if mnames[j] != "initialize"
-          pnames = "".split(",")
-          ptypes = "".split(",")
-
-          if j < all_params.length
-            pnames = all_params[j].split(",")
-          end
-          if j < all_ptypes.length
-            ptypes = all_ptypes[j].split(",")
-          end
+          pnames = cls_meth_pnames_get(oci, j)
+          ptypes = cls_meth_ptypes_get(oci, j)
           bid = -1
           if j < bodies.length
             bid = bodies[j].to_i
@@ -11167,10 +11079,10 @@ class Compiler
                 if ptypes[pk] == "int"
                   # Pick the class whose surface (readers + writers +
                   # methods, walked through parents) contains every
-                  # method actually called on this param. The old
-                  # algorithm matched on a single reader and ignored
-                  # later accesses, picking a class that didn't satisfy
-                  # them — issue #35.
+                  # method actually called on this param. Matching
+                  # only one reader and ignoring later accesses
+                  # would pick a class that fails to satisfy the
+                  # full method set.
                   called = "".split(",")
                   collect_param_methods(bid, pnames[pk], called)
                   if called.length > 0 && called_methods_only_on_container_builtins(called) == 0
@@ -11184,8 +11096,7 @@ class Compiler
                     end
                     if best >= 0
                       ptypes[pk] = "obj_" + @cls_names[best]
-                      all_ptypes[j] = ptypes.join(",")
-                      @cls_meth_ptypes[oci] = all_ptypes.join("|")
+                      cls_meth_ptypes_put(oci, j, ptypes)
                     end
                   end
                 end
@@ -17637,14 +17548,7 @@ class Compiler
   # Mirrors cls_method_has_yield: call sites use it to decide whether
   # to omit the trailing &block slot from default-padding.
   def cls_method_has_block_param(ci, midx)
-    if ci < 0 || midx < 0
-      return 0
-    end
-    all_ptypes = @cls_meth_ptypes[ci].split("|")
-    if midx >= all_ptypes.length
-      return 0
-    end
-    pts = all_ptypes[midx].split(",")
+    pts = cls_meth_ptypes_get(ci, midx)
     (pts.length > 0 && pts.last == "proc") ? 1 : 0
   end
 
@@ -17847,17 +17751,8 @@ class Compiler
       return "void"
     end
     init_idx = cls_find_method_direct(init_ci, "initialize")
-    all_params = @cls_meth_params[init_ci].split("|")
-    all_ptypes = @cls_meth_ptypes[init_ci].split("|")
-    pnames = "".split(",")
-    ptypes = "".split(",")
-
-    if init_idx < all_params.length
-      pnames = all_params[init_idx].split(",")
-    end
-    if init_idx < all_ptypes.length
-      ptypes = all_ptypes[init_idx].split(",")
-    end
+    pnames = cls_meth_pnames_get(init_ci, init_idx)
+    ptypes = cls_meth_ptypes_get(init_ci, init_idx)
     if pnames.length == 0
       return "void"
     end
@@ -17886,17 +17781,8 @@ class Compiler
     if init_idx < 0
       return ""
     end
-    all_params = @cls_meth_params[init_ci].split("|")
-    all_ptypes = @cls_meth_ptypes[init_ci].split("|")
-    pnames = "".split(",")
-    ptypes = "".split(",")
-
-    if init_idx < all_params.length
-      pnames = all_params[init_idx].split(",")
-    end
-    if init_idx < all_ptypes.length
-      ptypes = all_ptypes[init_idx].split(",")
-    end
+    pnames = cls_meth_pnames_get(init_ci, init_idx)
+    ptypes = cls_meth_ptypes_get(init_ci, init_idx)
     result = ""
     j = 0
     while j < pnames.length
@@ -28011,11 +27897,7 @@ class Compiler
         # this candidate accepts — happens when several classes share
         # the method name but disagree on parameter count).
         arm_arg_strs = ""
-        all_ptypes = @cls_meth_ptypes[i].split("|")
-        arm_ptypes = "".split(",")
-        if midx < all_ptypes.length
-          arm_ptypes = all_ptypes[midx].split(",")
-        end
+        arm_ptypes = cls_meth_ptypes_get(i, midx)
         pk = 0
         while pk < arm_ptypes.length
           if pk < arg_compiled.length
@@ -29322,16 +29204,8 @@ class Compiler
     if init_idx < 0
       return compile_call_args(nid)
     end
-    all_params = @cls_meth_params[init_ci].split("|")
-    all_ptypes = @cls_meth_ptypes[init_ci].split("|")
-    pnames = "".split(",")
-    ptypes = "".split(",")
-    if init_idx < all_params.length
-      pnames = all_params[init_idx].split(",")
-    end
-    if init_idx < all_ptypes.length
-      ptypes = all_ptypes[init_idx].split(",")
-    end
+    pnames = cls_meth_pnames_get(init_ci, init_idx)
+    ptypes = cls_meth_ptypes_get(init_ci, init_idx)
     # Build args in param order using keyword values
     result = ""
     pk = 0
