@@ -33649,6 +33649,40 @@ class Compiler
       end
     end
 
+    # `hash.each_value { |v| ... }` for poly_poly_hash. Other hash
+    # shapes can be added here once they surface; the underlying
+    # representation is the same `vals[order[i]]` walk.
+    if mname == "each_value" && recv >= 0 && @nd_block[nid] >= 0
+      rt_ev = infer_type(recv)
+      if rt_ev == "poly_poly_hash"
+        rc_ev = compile_expr_gc_rooted(recv)
+        bp_ev = get_block_param(nid, 0)
+        has_bp_ev = 1
+        if bp_ev == ""
+          has_bp_ev = 0
+          bp_ev = "_v"
+        end
+        tmp_ev = new_temp
+        emit("  for (mrb_int " + tmp_ev + " = 0; " + tmp_ev + " < " + rc_ev + "->len; " + tmp_ev + "++) {")
+        if has_bp_ev == 1
+          emit("    sp_RbVal lv_" + bp_ev + " = " + rc_ev + "->vals[" + rc_ev + "->order[" + tmp_ev + "]];")
+        end
+        @indent = @indent + 1
+        push_scope
+        if has_bp_ev == 1
+          declare_var(bp_ev, "poly")
+        end
+        redo_label_ev = push_redo_label
+        emit_redo_label(redo_label_ev)
+        compile_stmts_body(@nd_body[@nd_block[nid]])
+        pop_redo_label
+        pop_scope
+        @indent = @indent - 1
+        emit("  }")
+        return 1
+      end
+    end
+
     if mname == "each_slice"
       if @nd_block[nid] >= 0
         compile_each_slice_block(nid)
