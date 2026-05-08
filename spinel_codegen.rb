@@ -2934,6 +2934,18 @@ class Compiler
       end
     end
 
+    # `<obj>.class` returns the class name as a string (Spinel
+    # collapses Class/Module objects to their textual name; the
+    # only consumers in practice are interpolation
+    # `"#<#{self.class}>"` and `.to_s.split` chains, both of
+    # which work fine on a plain string).
+    if recv >= 0 && mname == "class"
+      rt = infer_type(recv)
+      if is_obj_type(rt) == 1
+        return "string"
+      end
+    end
+
     # `recv.__sp_ieval_<N>(...)`: the rewritten form of an
     # `recv.instance_eval { ... }` call. v1 only fired on top-level call
     # sites, where the call's value was always discarded — so its return
@@ -27877,6 +27889,16 @@ class Compiler
         arrow = "->"
         if @cls_is_value_type[ci] == 1
           arrow = "."
+        end
+        # `<obj>.class` — collapse to the class name as a string
+        # literal. Spinel doesn't allocate runtime Class objects,
+        # but the typical consumers (interpolation in inspect,
+        # `.to_s.split("::").last` shape) all treat the result as
+        # a string. Underscore-flattened nested module names
+        # (`Optcarrot_NES`) render as-is rather than the original
+        # `Optcarrot::NES` form; the loss is cosmetic.
+        if mname == "class"
+          return c_string_literal(cname)
         end
         # attr_reader
         readers = @cls_attr_readers[ci].split(";")
