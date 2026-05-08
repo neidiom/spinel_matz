@@ -2099,6 +2099,85 @@ class Compiler
     -1
   end
 
+  # `<arr>.method(:op)` for built-in array types: which (recv_type,
+  # mname) pairs we can lower into a Method-dispatch adapter. Limited
+  # to int_array's bracket ops + push for now (the optcarrot CPU
+  # memory-mapping shape `@ram.method(:[]=)`); extend the body to
+  # cover more (recv_type, mname) pairs as workloads need them.
+  def builtin_array_method_supported(recv_type, mname)
+    if recv_type == "int_array"
+      if mname == "[]" || mname == "[]=" || mname == "push"
+        return 1
+      end
+    end
+    0
+  end
+
+  def builtin_array_type_pfx(recv_type)
+    if recv_type == "int_array"
+      return "IntArray"
+    end
+    ""
+  end
+
+  # Emit a per-(array_type, mname) trampoline that fits the Method
+  # dispatch ABI `(void *self, mrb_int...) -> mrb_int`. The body
+  # forwards to the corresponding `sp_<Pfx>_<op>` runtime function;
+  # write-style ops (`[]=`, `push`) return the rhs the way Ruby's
+  # bracket-write does. Idempotent: re-emitting the same key is a
+  # no-op. Reuses @cls_method_adapters with a `@@`-prefixed key so
+  # it cannot collide with a user-class method adapter entry.
+  def emit_builtin_array_method_adapter(recv_type, mname)
+    key = "@@" + recv_type + "::" + mname
+    k = 0
+    while k < @cls_method_adapters.length
+      if @cls_method_adapters[k] == key
+        return
+      end
+      k = k + 1
+    end
+    @cls_method_adapters.push(key)
+    pfx = builtin_array_type_pfx(recv_type)
+    if pfx == ""
+      return
+    end
+    cast = "(sp_" + pfx + " *)"
+    adapter_name = "sp_" + pfx + "_" + sanitize_name(mname) + "_builtin_method_adapter"
+    if recv_type == "int_array" && mname == "[]"
+      @lambda_funcs << "static mrb_int "
+      @lambda_funcs << adapter_name
+      @lambda_funcs << "(void *_self, mrb_int _i) {\n"
+      @lambda_funcs << "  return sp_IntArray_get("
+      @lambda_funcs << cast
+      @lambda_funcs << "_self, _i);\n"
+      @lambda_funcs << "}\n"
+      return
+    end
+    if recv_type == "int_array" && mname == "[]="
+      @lambda_funcs << "static mrb_int "
+      @lambda_funcs << adapter_name
+      @lambda_funcs << "(void *_self, mrb_int _i, mrb_int _v) {\n"
+      @lambda_funcs << "  sp_IntArray_set("
+      @lambda_funcs << cast
+      @lambda_funcs << "_self, _i, _v);\n"
+      @lambda_funcs << "  return _v;\n"
+      @lambda_funcs << "}\n"
+      return
+    end
+    if recv_type == "int_array" && mname == "push"
+      @lambda_funcs << "static mrb_int "
+      @lambda_funcs << adapter_name
+      @lambda_funcs << "(void *_self, mrb_int _v) {\n"
+      @lambda_funcs << "  sp_IntArray_push("
+      @lambda_funcs << cast
+      @lambda_funcs << "_self, _v);\n"
+      @lambda_funcs << "  return _v;\n"
+      @lambda_funcs << "}\n"
+      return
+    end
+    nil
+  end
+
   # Emit a one-off adapter that wraps `sp_<Klass>_cls_<mname>` so the
   # Method dispatch ABI `(void *self, mrb_int...)` works on a class
   # method (which has no self param). Idempotent: re-emitting the
@@ -3062,8 +3141,27 @@ class Compiler
       if recv < 0 && @current_class_idx >= 0
         return "obj_Method"
       end
-      if recv >= 0 && is_obj_type(infer_type(recv)) == 1
-        return "obj_Method"
+      if recv >= 0
+        rt_meth = infer_type(recv)
+        if is_obj_type(rt_meth) == 1
+          return "obj_Method"
+        end
+        # `<arr>.method(:op)` on a supported built-in array type
+        # also produces a Method (lowered through a per-(type, op)
+        # adapter — see emit_builtin_array_method_adapter).
+        args_id_meth = @nd_arguments[nid]
+        if args_id_meth >= 0
+          arg_ids_meth = get_args(args_id_meth)
+          if arg_ids_meth.length >= 1
+            mref_meth = @nd_content[arg_ids_meth[0]]
+            if mref_meth == ""
+              mref_meth = @nd_name[arg_ids_meth[0]]
+            end
+            if builtin_array_method_supported(rt_meth, mref_meth) == 1
+              return "obj_Method"
+            end
+          end
+        end
       end
     end
 
@@ -22980,6 +23078,23 @@ class Compiler
             else
               return "sp_Method_new((sp_Method *)(" + rc + "), (mrb_int)0)"
             end
+          end
+          # Built-in array `<arr>.method(:op)`: emit a trampoline
+          # matching the Method dispatch ABI and bind. The receiver
+          # heap-allocated buffer pointer plays the role of `iv_self_obj`
+          # — sp_gc_mark dispatches via the GC header's scan field
+          # set at the array's allocation, so the type lie at the C
+          # level is GC-safe.
+          mref_b = @nd_content[arg_ids[0]]
+          if mref_b == ""
+            mref_b = @nd_name[arg_ids[0]]
+          end
+          if builtin_array_method_supported(recv_t, mref_b) == 1
+            emit_builtin_array_method_adapter(recv_t, mref_b)
+            pfx_b = builtin_array_type_pfx(recv_t)
+            adapter_name_b = "sp_" + pfx_b + "_" + sanitize_name(mref_b) + "_builtin_method_adapter"
+            rc_b = compile_expr(recv)
+            return "sp_Method_new((sp_Method *)(" + rc_b + "), (mrb_int)(uintptr_t)&" + adapter_name_b + ")"
           end
         end
       end
