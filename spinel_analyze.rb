@@ -9908,34 +9908,43 @@ class Compiler
         recv_iow_fwd = @nd_receiver[nid]
         recv_is_ivar_or_local = recv_iow_fwd >= 0 && (@nd_type[recv_iow_fwd] == "InstanceVariableReadNode" || @nd_type[recv_iow_fwd] == "LocalVariableReadNode")
         if rt == "int" && recv_is_ivar_or_local && primitive_method_shared_with_user_class(mname) == 0
-          matched_ci_fwd = -1
-          ci_fwd = 0
-          while ci_fwd < @cls_names.length
-            if cls_find_method_direct(ci_fwd, mname) >= 0
-              if matched_ci_fwd >= 0
-                matched_ci_fwd = -2
-                break
-              end
-              matched_ci_fwd = ci_fwd
-            end
-            ci_fwd = ci_fwd + 1
-          end
-          if matched_ci_fwd >= 0
-            midx_fwd = cls_find_method_direct(matched_ci_fwd, mname)
-            args_id_fwd = @nd_arguments[nid]
-            if args_id_fwd >= 0 && midx_fwd >= 0
-              arg_ids_fwd = get_args(args_id_fwd)
-              ptypes_fwd = cls_meth_ptypes_get(matched_ci_fwd, midx_fwd)
-              if ptypes_fwd.length > 0
-                kk_fwd = 0
-                while kk_fwd < arg_ids_fwd.length
-                  at_fwd = infer_type(arg_ids_fwd[kk_fwd])
-                  if kk_fwd < ptypes_fwd.length
-                    ptypes_fwd[kk_fwd] = unify_call_types(ptypes_fwd[kk_fwd], at_fwd, arg_ids_fwd[kk_fwd])
+          # Walk every user class that defines mname AND whose
+          # param count matches the call's arg count. Pre-fix
+          # this branch bailed on multi-match cases
+          # (matched_ci_fwd = -2), leaving every candidate's
+          # params at the int default and producing
+          # incompatible-pointer C errors when poly-typed
+          # iteration over heterogeneous receivers reaches
+          # them. Issue #407 case 2: `[IndexHandler.new,
+          # UsersHandler.new].each { |h| h.handle(req, res) }`
+          # -- both Index/UsersHandler#handle(req,res) get
+          # widened from "/" and "" args; sibling classes that
+          # happen to define `handle` with a different arity
+          # (SQLite's attr_accessor, 0-arg getter) are filtered
+          # out by the arity check.
+          args_id_fwd_407 = @nd_arguments[nid]
+          if args_id_fwd_407 >= 0
+            arg_ids_fwd_407 = get_args(args_id_fwd_407)
+            arg_count_fwd_407 = arg_ids_fwd_407.length
+            if arg_count_fwd_407 > 0
+              ci_fwd = 0
+              while ci_fwd < @cls_names.length
+                midx_fwd_407c = cls_find_method_direct(ci_fwd, mname)
+                if midx_fwd_407c >= 0
+                  ptypes_fwd_407c = cls_meth_ptypes_get(ci_fwd, midx_fwd_407c)
+                  if ptypes_fwd_407c.length == arg_count_fwd_407
+                    kk_fwd_407c = 0
+                    while kk_fwd_407c < arg_count_fwd_407
+                      at_fwd_407c = infer_type(arg_ids_fwd_407[kk_fwd_407c])
+                      if kk_fwd_407c < ptypes_fwd_407c.length
+                        ptypes_fwd_407c[kk_fwd_407c] = unify_call_types(ptypes_fwd_407c[kk_fwd_407c], at_fwd_407c, arg_ids_fwd_407[kk_fwd_407c])
+                      end
+                      kk_fwd_407c = kk_fwd_407c + 1
+                    end
+                    cls_meth_ptypes_put(ci_fwd, midx_fwd_407c, ptypes_fwd_407c)
                   end
-                  kk_fwd = kk_fwd + 1
                 end
-                cls_meth_ptypes_put(matched_ci_fwd, midx_fwd, ptypes_fwd)
+                ci_fwd = ci_fwd + 1
               end
             end
           end
