@@ -1843,6 +1843,53 @@ class Compiler
     -1
   end
 
+  # Issue #422: look up the C return type of `ci`'s cmeth named
+  # `mname`. Walks @cls_cmeth_returns directly (cls_cmethod_owner
+  # already resolves inheritance, so callers pass the owner ci).
+  # Defaults to "int" when the name isn't present -- the chained
+  # dispatch path verifies owner >= 0 before consulting this.
+  def cls_cmeth_return_type(ci, mname)
+    if ci < 0
+      return "int"
+    end
+    cmnames = @cls_cmeth_names[ci].split(";")
+    cm_returns = @cls_cmeth_returns[ci].split(";")
+    cj = 0
+    while cj < cmnames.length
+      if cmnames[cj] == mname
+        if cj < cm_returns.length
+          return cm_returns[cj]
+        end
+        return "int"
+      end
+      cj = cj + 1
+    end
+    "int"
+  end
+
+  # Issue #422: enumerate descendants of inner_ci (including
+  # inner_ci itself) whose cmeth owner differs from base_owner.
+  # Each entry is encoded `<descendant_ci>,<owner_ci>` separated
+  # by `;`. Empty string when no overrides exist (caller stays on
+  # the static-dispatch path).
+  def cls_cmeth_override_descendants(inner_ci, base_owner, mname)
+    out = ""
+    ck = 0
+    while ck < @cls_names.length
+      if ck == inner_ci || cls_is_descendant(ck, inner_ci) == 1
+        ow = cls_cmethod_owner(ck, mname)
+        if ow >= 0 && ow != base_owner
+          if out != ""
+            out = out + ";"
+          end
+          out = out + ck.to_s + "," + ow.to_s
+        end
+      end
+      ck = ck + 1
+    end
+    out
+  end
+
   # `<arr>.method(:op)` for built-in array types: which (recv_type,
   # mname) pairs we can lower into a Method-dispatch adapter. Limited
   # to int_array's bracket ops + push for now (the optcarrot CPU
@@ -6718,7 +6765,35 @@ class Compiler
     end
   end
 
+  # Issue #422: a class is a layout-root iff it has no parent in
+  # @cls_names (either no declared parent, or its declared parent
+  # is a built-in like StandardError that spinel doesn't emit as
+  # a sp_<C> struct). Layout-roots own the cls_id slot at offset
+  # 0; subclasses pick it up through parent-fields-first walking.
+  def is_layout_root(ci)
+    if @cls_parents[ci] == ""
+      return 1
+    end
+    if find_class_idx(@cls_parents[ci]) < 0
+      return 1
+    end
+    0
+  end
+
   def emit_class_fields(ci)
+    # Issue #422: per-instance cls_id as the first field on a
+    # root-of-its-tree non-value-type class. Subclasses inherit
+    # the slot via parent-fields-first ordering, so a cast
+    # `sp_Child *` -> `sp_Base *` preserves the cls_id at the
+    # same offset and `self->cls_id` reads it correctly from a
+    # parent-typed pointer. Value-types are excluded (no
+    # heap-allocated instance, no subclasses by design). A class
+    # whose declared parent isn't in @cls_names (built-in like
+    # StandardError that spinel doesn't model as a sp_* struct)
+    # is effectively a root for layout purposes -- treat the same.
+    if @cls_is_value_type[ci] == 0 && is_layout_root(ci) == 1
+      emit_raw("  mrb_int cls_id;")
+    end
     # Parent fields first
     if @cls_parents[ci] != ""
       pi = find_class_idx(@cls_parents[ci])
@@ -6758,6 +6833,12 @@ class Compiler
       if pi >= 0
         emit_parent_fields(pi)
       end
+    end
+    # Issue #422: cls_id at the root of the parent chain. See
+    # emit_class_fields' comment for the offset-preservation
+    # rationale.
+    if @cls_is_value_type[ci] == 0 && is_layout_root(ci) == 1
+      emit_raw("  mrb_int cls_id;")
     end
     names = @cls_ivar_names[ci].split(";")
     types = @cls_ivar_types[ci].split(";")
@@ -7605,6 +7686,11 @@ class Compiler
         scan_fn = "sp_" + cname + "_gc_scan"
       end
       emit_raw("  sp_" + cname + " *self = (sp_" + cname + " *)sp_gc_alloc(sizeof(sp_" + cname + "), NULL, " + scan_fn + ");")
+      # Issue #422: tag the freshly-allocated instance with its
+      # concrete class id so a parent-method's `self.class.<cmeth>`
+      # path can read self->cls_id at runtime and switch to the
+      # subclass's override.
+      emit_raw("  self->cls_id = " + ci.to_s + "LL;")
       emit_raw("  SP_GC_ROOT(self);")
     end
 
@@ -16002,6 +16088,67 @@ class Compiler
               if owner_419 >= 0
                 owner_name_419 = @cls_names[owner_419]
                 ca_419 = compile_call_args(nid)
+                # Issue #422: when descendants of inner_ci override
+                # `mname` as a cmeth, the static call below routes
+                # everything to the base class -- wrong when the
+                # runtime instance is actually a subclass. Lower to
+                # a switch on `<inner>->cls_id` so the dispatch lands
+                # on the override. Gated on:
+                #   - inner_recv simple (SelfNode or LocalVar) so its
+                #     C expression has no side effects and can be
+                #     reused for both `->cls_id` and the per-arm call.
+                #   - inner_ci non-value-type (value types have no
+                #     cls_id slot and no subclassing in spinel).
+                #   - args absent (the no-arg case covers the canonical
+                #     #422 reproducer and lets us reuse compile_call_args
+                #     output across arms without reasoning about side
+                #     effects from arg expressions).
+                #   - all candidate owners' return types match (otherwise
+                #     a unified result temp can't be typed).
+                ovr_422 = ""
+                if @cls_is_value_type[inner_ci_419] == 0 && ca_419 == ""
+                  nty_422 = @nd_type[inner_recv_419]
+                  if nty_422 == "SelfNode" || nty_422 == "LocalVariableReadNode"
+                    ovr_422 = cls_cmeth_override_descendants(inner_ci_419, owner_419, mname)
+                  end
+                end
+                if ovr_422 != ""
+                  base_rt_422 = cls_cmeth_return_type(owner_419, mname)
+                  ovr_pairs_422 = ovr_422.split(";")
+                  rt_ok_422 = 1
+                  op_422 = 0
+                  while op_422 < ovr_pairs_422.length
+                    pair_422 = ovr_pairs_422[op_422].split(",")
+                    cand_owner_check_422 = pair_422[1].to_i
+                    cand_rt_422 = cls_cmeth_return_type(cand_owner_check_422, mname)
+                    if cand_rt_422 != base_rt_422
+                      rt_ok_422 = 0
+                      op_422 = ovr_pairs_422.length
+                    else
+                      op_422 = op_422 + 1
+                    end
+                  end
+                  if rt_ok_422 == 1
+                    inner_c_422 = compile_expr(inner_recv_419)
+                    tmp_422 = new_temp
+                    rt_c_422 = c_type(base_rt_422)
+                    default_call_422 = "sp_" + owner_name_419 + "_cls_" + sanitize_name(mname) + "()"
+                    emit("  " + rt_c_422 + " " + tmp_422 + " = " + default_call_422 + ";")
+                    emit("  switch (" + inner_c_422 + "->cls_id) {")
+                    op2_422 = 0
+                    while op2_422 < ovr_pairs_422.length
+                      pair2_422 = ovr_pairs_422[op2_422].split(",")
+                      cand_cid_422 = pair2_422[0]
+                      cand_owner_422 = pair2_422[1].to_i
+                      cand_name_422 = @cls_names[cand_owner_422]
+                      cand_call_422 = "sp_" + cand_name_422 + "_cls_" + sanitize_name(mname) + "()"
+                      emit("    case " + cand_cid_422 + "LL: " + tmp_422 + " = " + cand_call_422 + "; break;")
+                      op2_422 = op2_422 + 1
+                    end
+                    emit("  }")
+                    return tmp_422
+                  end
+                end
                 if ca_419 == ""
                   return "sp_" + owner_name_419 + "_cls_" + sanitize_name(mname) + "()"
                 end
