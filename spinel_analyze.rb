@@ -6286,7 +6286,13 @@ class Compiler
               while ik < inc_ids.length
                 if @nd_type[inc_ids[ik]] == "ConstantReadNode"
                   mod_name = @nd_name[inc_ids[ik]]
-                  collect_module_methods_into_class(ci, mod_name)
+                  # Issue #425: when this class is nested inside a
+                  # module (module_prefix != ""), the include arg is
+                  # a bare ConstantReadNode but the registered module
+                  # name is `<prefix>_<name>`. Try the qualified form
+                  # first; fall back to the bare name for top-level
+                  # modules.
+                  collect_module_methods_into_class(ci, resolve_include_module_name(mod_name, module_prefix))
                 end
                 ik = ik + 1
               end
@@ -6509,7 +6515,11 @@ class Compiler
             while ik < inc_ids.length
               if @nd_type[inc_ids[ik]] == "ConstantReadNode"
                 mod_name = @nd_name[inc_ids[ik]]
-                collect_module_methods_into_class(ci, mod_name)
+                # Issue #425: same prefix resolution as the
+                # class-reopening branch -- the include arg is a
+                # bare name but the registered module's name is
+                # `<prefix>_<name>` when nested in a module.
+                collect_module_methods_into_class(ci, resolve_include_module_name(mod_name, module_prefix))
               end
               ik = ik + 1
             end
@@ -6614,6 +6624,26 @@ class Compiler
     @undef_method.push(name)
   end
 
+
+  # Issue #425: resolve a bare include arg against the enclosing
+  # module's lexical scope. For `module Ns; class Base; include
+  # Helper; end; end`, the include's ConstantReadNode is the
+  # unqualified `Helper`, but the registered module's name (from
+  # collect_module_with_prefix) is `Ns_Helper`. Try the qualified
+  # form first; fall back to the bare name for top-level modules.
+  def resolve_include_module_name(mod_name, module_prefix)
+    if module_prefix != ""
+      qualified = module_prefix + "_" + mod_name
+      i = 0
+      while i < @module_names.length
+        if @module_names[i] == qualified
+          return qualified
+        end
+        i = i + 1
+      end
+    end
+    mod_name
+  end
 
   def collect_module_methods_into_class(ci, mod_name)
     # Find the module and add its methods to the class
