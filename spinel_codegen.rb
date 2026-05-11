@@ -433,6 +433,13 @@ class Compiler
     # build. Flip this when an actual usage site fires; emit
     # the Method struct + helpers only when it's set.
     @needs_method = 0
+    # sp_sym_array_sort + sp_sym_sort_cmp are emitted inside the
+    # @sym_names guard in emit_sym_runtime; a program that uses
+    # any symbol gets the sort helpers even when nothing calls
+    # `<sym_array>.sort`. Pre-scan flips this when a `.sort` /
+    # `.sort!` CallNode appears so the helpers stay out of
+    # programs that don't sort.
+    @needs_sym_sort = 0
     @regexp_patterns = "".split(",")
     @regexp_flags = "".split(",")
     # Dynamic-regex (InterpolatedRegularExpressionNode) call-site cache.
@@ -6766,10 +6773,12 @@ class Compiler
         i = i + 1
       end
       # Sort comparator for sym arrays: lexical by symbol name.
-      emit_raw("static int sp_sym_sort_cmp(const void*a,const void*b) __attribute__((unused));")
-      emit_raw("static int sp_sym_sort_cmp(const void*a,const void*b){return strcmp(sp_sym_to_s(*(const sp_sym*)a),sp_sym_to_s(*(const sp_sym*)b));}")
-      emit_raw("static void sp_sym_array_sort(sp_IntArray*a) __attribute__((unused));")
-      emit_raw("static void sp_sym_array_sort(sp_IntArray*a){qsort(a->data+a->start,a->len,sizeof(mrb_int),sp_sym_sort_cmp);}")
+      if @needs_sym_sort == 1
+        emit_raw("static int sp_sym_sort_cmp(const void*a,const void*b) __attribute__((unused));")
+        emit_raw("static int sp_sym_sort_cmp(const void*a,const void*b){return strcmp(sp_sym_to_s(*(const sp_sym*)a),sp_sym_to_s(*(const sp_sym*)b));}")
+        emit_raw("static void sp_sym_array_sort(sp_IntArray*a) __attribute__((unused));")
+        emit_raw("static void sp_sym_array_sort(sp_IntArray*a){qsort(a->data+a->start,a->len,sizeof(mrb_int),sp_sym_sort_cmp);}")
+      end
     else
       # No symbols used at all -- emit a 1-line stub.
       # sp_runtime.h's poly_to_s / poly_puts / poly_inspect /
@@ -9297,6 +9306,15 @@ class Compiler
         # table plus sp_class_to_s back the .to_s / .name / .inspect
         # chain that typically follows.
         @needs_class_table = 1
+      end
+      if mname_ch == "sort" || mname_ch == "sort!"
+        # `.sort` / `.sort!` on a sym_array compiles via
+        # sp_sym_array_sort + sp_sym_sort_cmp. Pre-scan flips
+        # @needs_sym_sort conservatively on any .sort / .sort!
+        # call -- false positives (sort on int / str / float
+        # arrays) cost a 4-line dead helper that -O2 DCE
+        # removes; missing the trigger breaks the link.
+        @needs_sym_sort = 1
       end
       if mname_ch == "to_s" || mname_ch == "name" || mname_ch == "inspect"
         # Static recv check is too brittle pre-inference; flag
