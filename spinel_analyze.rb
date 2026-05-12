@@ -20,6 +20,11 @@ class Compiler
     @indent = 0
     @temp_counter = 0
     @label_counter = 0
+ # Body root tracked during scan_writer_calls so the
+ # InstanceVariableWriteNode arm can look at the body for push
+ # observations on a LVR rhs and derive a promoted array type
+ # before pinning the ivar.
+    @cur_writer_body = -1
 
  # ---- AST node storage (parallel arrays by node ID) ----
  # Use "".split(",") for StrArray init (v1 infers StrArray from split)
@@ -12007,7 +12012,9 @@ class Compiler
           declare_var(ml[lk], mt[lk])
           lk = lk + 1
         end
+        @cur_writer_body = @meth_body_ids[i]
         scan_writer_calls(@meth_body_ids[i])
+        @cur_writer_body = -1
       end
       @current_method_name = saved_meth
       pop_scope
@@ -12043,7 +12050,9 @@ class Compiler
             declare_var(ml2[lk2], mt2[lk2])
             lk2 = lk2 + 1
           end
+          @cur_writer_body = bid
           scan_writer_calls(bid)
+          @cur_writer_body = -1
           pop_scope
         end
         bj = bj + 1
@@ -12084,7 +12093,9 @@ class Compiler
             declare_var(cml[clk], cmt[clk])
             clk = clk + 1
           end
+          @cur_writer_body = cbid
           scan_writer_calls(cbid)
+          @cur_writer_body = -1
           pop_scope
         end
         cbj = cbj + 1
@@ -12300,6 +12311,24 @@ class Compiler
  # widen the promoted type to poly on the next iteration.
         if is_empty_hash_literal(bottom) == 0 && is_empty_array_literal(bottom) == 0
           at = infer_type(bottom)
+ # `@ivar = <local>` where <local>'s slot type is "int_array"
+ # (the empty-array default that scan_locals records for `x =
+ # []`) often promotes later via push observations within the
+ # same body — `results = []; results << Article.new;
+ # @articles = results`. infer_type at scan time only sees the
+ # current scope-recorded type (int_array), so the ivar pins
+ # at int_array even though the assignment is meant to carry a
+ # ptr_array of obj. Look at the body's push elements to derive
+ # the promoted type before recording.
+          if at == "int_array" && @cur_writer_body >= 0 && @nd_type[bottom] == "LocalVariableReadNode"
+            lname_a = @nd_name[bottom]
+            elem_acc_a = "".split(",")
+            collect_param_push_elem_types(@cur_writer_body, lname_a, elem_acc_a)
+            promoted_a = empty_array_promotion_for(elem_acc_a)
+            if promoted_a != ""
+              at = promoted_a
+            end
+          end
  # Record this writer's concrete type observation while
  # the local-scope context is set up (params declared at
  # their iteratively-widened ptypes). After all
@@ -13475,8 +13504,23 @@ class Compiler
  # Collect all explicit return types
     types = "".split(",")
     collect_return_types_nid(body_id, types)
- # Add implicit return (last expression)
-    last_type = infer_type(stmts.last)
+ # Add implicit return (last expression). When the implicit return
+ # is a bare LocalVariableReadNode of an "int_array"-typed local
+ # (the empty-`[]` default), look at the body's push observations
+ # on the same local to derive the promoted array type, so a
+ # `def f; results = []; results << Comment.new; results; end`
+ # body's return is sp_PtrArray<Comment> rather than sp_IntArray.
+    last_id = stmts.last
+    last_type = infer_type(last_id)
+    if last_type == "int_array" && @nd_type[last_id] == "LocalVariableReadNode"
+      lname_lr = @nd_name[last_id]
+      elem_acc_lr = "".split(",")
+      collect_param_push_elem_types(body_id, lname_lr, elem_acc_lr)
+      promoted_lr = empty_array_promotion_for(elem_acc_lr)
+      if promoted_lr != ""
+        last_type = promoted_lr
+      end
+    end
     types.push(last_type)
  # Unify all return path types
     unify_return_type(types)
