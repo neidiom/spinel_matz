@@ -17736,6 +17736,24 @@ class Compiler
     if nid < 0
       return
     end
+ # Nested DefNode / ClassNode / ModuleNode bodies are separate
+ # scopes — their locals belong to the enclosed method / class /
+ # module and must not leak into the parent scope. Without these
+ # guards, scan_locals called from infer_main_call_types (or any
+ # outer-context caller) walks into every nested method body and
+ # records each `local = ...` write as if it were a sibling of
+ # main's own locals. Two functions with the same local name
+ # but different inferred types then widen to "poly" via the
+ # repeated-write merge below, propagating poly into call-site
+ # arg types and (via the bare-recv / module-dispatch widening
+ # arms in scan_new_calls) into the callee's param types
+ # — the topology behind #450 cascade 1.
+    if @nd_type[nid] == "DefNode"
+      return
+    end
+    if @nd_type[nid] == "ClassNode" || @nd_type[nid] == "ModuleNode"
+      return
+    end
  # Parallel to `names`: "1" if this local's current stored type was set
  # by an explicit literal write, "" otherwise. Reset when called with
  # a fresh (empty) names array.
