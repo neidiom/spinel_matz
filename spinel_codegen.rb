@@ -2810,6 +2810,15 @@ class Compiler
         @needs_rb_value = 1
         return "poly_array"
       end
+ # Proc / lambda literals as elements (`[proc { ... }, proc { ... }]`):
+ # see the analyzer's mirror branch. Spinel has no typed
+ # `proc_ptr_array` slot, so box via poly_array — sp_box_proc on
+ # each push.
+      if et == "proc" || et == "lambda"
+        @needs_gc = 1
+        @needs_rb_value = 1
+        return "poly_array"
+      end
  # Check if elements have mixed types
       k = 1
       while k < elems.length
@@ -10627,12 +10636,11 @@ class Compiler
         if pred_type == "string"
           emit("  const char *" + ptmp + " = " + pred_val + ";")
         elsif is_obj_type(pred_type) == 1
- # See compile_case_stmt — the temp must be the right pointer
- # type so compile_when_conds can resolve `when ClassName` to
- # a static match. .
-          bt = base_type(pred_type)
-          obj_cname = bt[4, bt.length - 4]
-          emit("  sp_" + obj_cname + " *" + ptmp + " = " + pred_val + ";")
+ # See compile_case_stmt — route the temp declaration through
+ # c_type so value-type classes get `sp_<X>` (no pointer) and
+ # standard heap classes get `sp_<X> *`. compile_when_conds then
+ # resolves `when ClassName` against the right shape.
+          emit("  " + c_type(pred_type) + " " + ptmp + " = " + pred_val + ";")
         else
           emit("  mrb_int " + ptmp + " = " + pred_val + ";")
         end
@@ -12367,6 +12375,18 @@ class Compiler
   end
 
   def compile_no_recv_call_expr(nid, mname)
+ # No-recv IO methods that exist in compile_io_call_stmt (puts/print/
+ # printf) all return nil in MRI. When reached in expression context
+ # — proc-body last stmt, consumed `if`-arm, ternary — emit the
+ # side-effect through the statement handler and pass "0" (nil in C)
+ # up as the expression value. Without this, the call falls through
+ # to warn_unresolved_call and the IO is silently dropped.
+    if mname == "puts" || mname == "print" || mname == "printf"
+      if compile_io_call_stmt(nid, mname, -1) == 1
+        return "0"
+      end
+    end
+
  # Bare `new` inside a `def self.<m>` body resolves to
  # <CurrentClass>.new. Dispatched here rather than via the
  # later `mname == "new"` branch in compile_call_expr because
@@ -13023,6 +13043,20 @@ class Compiler
           end
           return "sp_proc_call(lv_" + rname + ", (mrb_int[]){" + ca + "})"
         end
+      end
+
+ # Anonymous-proc-receiver dispatch — `proc { ... }.call`, or any
+ # expression chain whose inferred type is `proc` (e.g.
+ # `factory().call`). The LocalVariableReadNode branch above handles
+ # the named-proc case directly; this generic branch compiles the
+ # receiver expression and feeds it to sp_proc_call, using the same
+ # arg-array packing convention.
+      if infer_type(recv) == "proc"
+        ca_anon = compile_call_args(nid)
+        if ca_anon == ""
+          ca_anon = "0"
+        end
+        return "sp_proc_call(" + compile_expr(recv) + ", (mrb_int[]){" + ca_anon + "})"
       end
     end
     ""
@@ -17147,9 +17181,29 @@ class Compiler
     ""
   end
 
+  def is_static_const_ref(aid)
+    if @nd_type[aid] == "ConstantReadNode" || @nd_type[aid] == "ConstantPathNode"
+      return 1
+    end
+    0
+  end
+
+ # Resolve an is_a?/kind_of?/instance_of? argument to its registered
+ # class name. ConstantPathNode (`Foo::Bar`) walks the path via
+ # resolve_const_ref_name; ConstantReadNode (`Foo`) carries the leaf
+ # in @nd_name. Other shapes fall back to @nd_name so static lookup
+ # still has a name to try.
+  def resolve_introspection_arg_name(aid)
+    if @nd_type[aid] == "ConstantPathNode"
+      return resolve_const_ref_name(aid)
+    end
+    @nd_name[aid]
+  end
+
   def compile_introspection_expr(nid, mname, rc, recv_type)
- # is_a? - check class hierarchy
-    if mname == "is_a?"
+ # is_a? / kind_of? — kind_of? is an exact alias of is_a? in MRI.
+ # Both walk the class hierarchy: cname is or inherits from arg0 → TRUE.
+    if mname == "is_a?" || mname == "kind_of?"
       if is_obj_type(recv_type) == 1
         cname = recv_type[4, recv_type.length - 4]
         arg0 = ""
@@ -17157,12 +17211,12 @@ class Compiler
         if args_id >= 0
           a = get_args(args_id)
           if a.length > 0
- # dynamic Class arg. The
- # statically-typed recv knows its own cls_id; the arg
- # carries the target cls_id at runtime. sp_class_le walks
- # the precomputed ancestors table to decide membership.
+ # Dynamic Class arg (a non-const expression evaluating to a class).
+ # The statically-typed recv knows its own cls_id; the arg carries
+ # the target cls_id at runtime. sp_class_le walks the precomputed
+ # ancestors table to decide membership.
             arg_t = infer_type(a[0])
-            if arg_t == "class" && @nd_type[a[0]] != "ConstantReadNode"
+            if arg_t == "class" && is_static_const_ref(a[0]) == 0
               ci = find_class_idx(cname)
               if ci >= 0
                 @needs_class_table = 1
@@ -17170,11 +17224,33 @@ class Compiler
                 return "sp_class_le((sp_Class){" + cls_id_for_user_internal(ci).to_s + "LL}, " + compile_expr(a[0]) + ")"
               end
             end
-            arg0 = @nd_name[a[0]]
+            arg0 = resolve_introspection_arg_name(a[0])
           end
         end
- # Check if cname is or inherits from arg0
         if is_class_or_ancestor(cname, arg0) == 1
+          return "TRUE"
+        else
+          return "FALSE"
+        end
+      end
+      return "FALSE"
+    end
+
+ # instance_of? — exact class identity, no ancestor walk. A parent
+ # instance is never an exact-subclass match, so descendant resolution
+ # is not relevant here; static comparison suffices.
+    if mname == "instance_of?"
+      if is_obj_type(recv_type) == 1
+        cname = recv_type[4, recv_type.length - 4]
+        arg0 = ""
+        args_id = @nd_arguments[nid]
+        if args_id >= 0
+          a = get_args(args_id)
+          if a.length > 0
+            arg0 = resolve_introspection_arg_name(a[0])
+          end
+        end
+        if cname == arg0
           return "TRUE"
         else
           return "FALSE"
@@ -18448,6 +18524,29 @@ class Compiler
         emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_SYM_POLY_HASH) " + result_tmp + " = sp_box_obj((void *)sp_SymPolyHash_dup((sp_SymPolyHash *)" + recv_tmp + ".v.p), SP_BUILTIN_SYM_POLY_HASH);")
         emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_POLY_POLY_HASH) " + result_tmp + " = sp_box_obj((void *)sp_PolyPolyHash_dup((sp_PolyPolyHash *)" + recv_tmp + ".v.p), SP_BUILTIN_POLY_POLY_HASH);")
       end
+    end
+ # `<poly>.call(...)` arm for the SP_BUILTIN_PROC tag. When a
+ # poly_array of procs is iterated (`[proc, ...].each { |p| p.call }`),
+ # the per-element block param is typed `poly`, so `p.call` lands
+ # here. Pack the call args into the same mrb_int[] convention used
+ # by sp_proc_call elsewhere; pad with 0 when there are no args
+ # (sp_proc_new's `_unused` slot expects args[0] to be addressable).
+    if mname == "call"
+      ca = ""
+      ck = 0
+      while ck < arg_compiled.length
+        if ck > 0
+          ca = ca + ", "
+        end
+        ca = ca + arg_compiled[ck]
+        ck = ck + 1
+      end
+      if ca == ""
+        ca = "0"
+      end
+      proc_c = "sp_proc_call((sp_Proc *)" + recv_tmp + ".v.p, (mrb_int[]){" + ca + "})"
+      proc_rhs = is_poly_ret == 1 ? "sp_box_int(" + proc_c + ")" : proc_c
+      emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_PROC) " + result_tmp + " = " + proc_rhs + ";")
     end
     if mname == "[]" && arg_compiled.length >= 1 && a0_is_int
       ic = "sp_IntArray_get((sp_IntArray *)" + recv_tmp + ".v.p, " + a0 + ")"
@@ -20252,12 +20351,90 @@ class Compiler
     "sp_" + owner + "_" + sanitize_name(op) + "(" + cast + recv_c + ", " + rhs_c + ")"
   end
 
+  def if_branch_has_multi_stmt(body)
+    if body < 0
+      return 0
+    end
+    if get_stmts(body).length > 1
+      return 1
+    end
+    0
+  end
+
+ # Assign the value of an if-arm body to a temp, executing any
+ # leading side-effect statements before the assignment. Body
+ # convention: stmts[0..n-2] run for their side-effects;
+ # stmts[n-1] supplies the arm's value. Empty/missing body → "0".
+  def compile_if_arm_to_tmp(body, tmp, unified_t)
+    if body < 0
+      emit("  " + tmp + " = 0;")
+      return
+    end
+    stmts = get_stmts(body)
+    if stmts.length == 0
+      emit("  " + tmp + " = 0;")
+      return
+    end
+    i = 0
+    while i < stmts.length - 1
+      compile_stmt(stmts[i])
+      i = i + 1
+    end
+    last_id = stmts.last
+    val = compile_expr(last_id)
+    if unified_t == "poly" && infer_type(last_id) != "poly"
+      val = box_value_to_poly(infer_type(last_id), val)
+    end
+    emit("  " + tmp + " = " + val + ";")
+  end
+
   def compile_if_expr(nid)
     cond = compile_cond_expr(@nd_predicate[nid])
     unified_t = infer_type(nid)
+    body = @nd_body[nid]
+    sub = @nd_subsequent[nid]
+
+ # Side-effect-aware path: when any branch holds more than one
+ # statement, the leading stmts must execute conditionally. The
+ # plain ternary form drops them. Emit a real if-statement that
+ # assigns to a temp and return the temp as the expression value.
+ # Elsif chains recurse — the inner call returns either a temp or
+ # a ternary string, both valid expressions.
+    has_then_multi = if_branch_has_multi_stmt(body)
+    has_else_multi = 0
+    if sub >= 0 && @nd_type[sub] == "ElseNode"
+      has_else_multi = if_branch_has_multi_stmt(@nd_body[sub])
+    end
+    if has_then_multi == 1 || has_else_multi == 1
+      tmp = new_temp
+      emit("  " + c_type(unified_t) + " " + tmp + ";")
+      emit("  if (" + cond + ") {")
+      @indent = @indent + 1
+      compile_if_arm_to_tmp(body, tmp, unified_t)
+      @indent = @indent - 1
+      emit("  } else {")
+      @indent = @indent + 1
+      if sub >= 0 && @nd_type[sub] == "ElseNode"
+        compile_if_arm_to_tmp(@nd_body[sub], tmp, unified_t)
+      elsif sub >= 0
+        sub_val = compile_if_expr(sub)
+        sub_t = infer_type(sub)
+        if unified_t == "poly" && sub_t != "poly"
+          sub_val = box_value_to_poly(sub_t, sub_val)
+        end
+        emit("  " + tmp + " = " + sub_val + ";")
+      else
+        emit("  " + tmp + " = 0;")
+      end
+      @indent = @indent - 1
+      emit("  }")
+      return tmp
+    end
+
+ # Fast path: every branch is at most one statement, so the
+ # whole if-expression collapses to a C ternary.
     then_val = "0"
     then_t = "nil"
-    body = @nd_body[nid]
     if body >= 0
       stmts = get_stmts(body)
       if stmts.length > 0
@@ -20267,7 +20444,6 @@ class Compiler
     end
     else_val = "0"
     else_t = "nil"
-    sub = @nd_subsequent[nid]
     if sub >= 0
       if @nd_type[sub] == "ElseNode"
         eb = @nd_body[sub]
@@ -22473,13 +22649,12 @@ class Compiler
     if pred_type == "string"
       emit("  const char *" + tmp + " = " + pred_val + ";")
     elsif is_obj_type(pred_type) == 1
- # `case obj when ClassName` — keep the temp as the right pointer
- # type so the when arms can read its NULLability and the static
- # class match in compile_when_conds picks the matching cls_id
- # path. .
-      bt = base_type(pred_type)
-      obj_cname = bt[4, bt.length - 4]
-      emit("  sp_" + obj_cname + " *" + tmp + " = " + pred_val + ";")
+ # `case obj when ClassName` — declare the temp at the C type
+ # c_type uses for this obj kind. That picks `sp_<X>` for
+ # value-type classes (per-class free-list pool) and `sp_<X> *`
+ # for the standard pointer representation, so the assignment
+ # matches the predicate's actual storage shape.
+      emit("  " + c_type(pred_type) + " " + tmp + " = " + pred_val + ";")
     elsif pred_type == "poly"
  # `case <poly_value> when ...` — keep the receiver tagged so
  # each when-arm can do tag-check + value-compare. .
@@ -22560,19 +22735,18 @@ class Compiler
         right = compile_expr(@nd_right[cid])
         cmp = range_excl_end(cid) == 1 ? "<" : "<="
         result = result + "(" + tmp + " >= " + left + " && " + tmp + " " + cmp + " " + right + ")"
-      elsif is_obj_type(pred_type) == 1 && @nd_type[cid] == "ConstantReadNode"
+      elsif is_obj_type(pred_type) == 1 && (@nd_type[cid] == "ConstantReadNode" || @nd_type[cid] == "ConstantPathNode")
  # `case obj when ClassName` — resolve statically against the
- # predicate's known class. Predicate type `obj_X`:
+ # predicate's known class. ConstantPathNode (`Mod::Klass`) is
+ # routed through resolve_const_ref_name so the walked name
+ # matches the class registry. Predicate type `obj_X`:
  # when X (or any ancestor of X) → match (with a NULL guard
- # when the predicate is
- # nullable, since `nil` is
- # not a class instance)
- # when anything else → no match
- # Subclass matching across an `obj_<Parent>` predicate that
- # actually carries an `obj_<Child>` instance needs a runtime
- # cls_id check; that's a separate enhancement only
- # covers the static-class form of the bug).
-        cname = @nd_name[cid]
+ # when the predicate is nullable, since `nil` is not a class
+ # instance); anything else → no match. Subclass matching
+ # across an `obj_<Parent>` predicate that actually carries an
+ # `obj_<Child>` instance needs a runtime cls_id check; covered
+ # by the descendant runtime branch in is_a?, separate concern.
+        cname = @nd_type[cid] == "ConstantPathNode" ? resolve_const_ref_name(cid) : @nd_name[cid]
         if find_class_idx(cname) >= 0
           bt = base_type(pred_type)
           pred_cname = bt[4, bt.length - 4]
@@ -23053,27 +23227,8 @@ class Compiler
     end
     if mname == "printf"
       if recv < 0
-        args_id = @nd_arguments[nid]
-        if args_id >= 0
-          arg_ids = get_args(args_id)
-          if arg_ids.length >= 1
- # First arg is format string
-            fmt_expr = compile_expr(arg_ids[0])
-            rest_args = ""
-            k = 1
-            while k < arg_ids.length
-              at = infer_type(arg_ids[k])
-              if at == "int"
-                rest_args = rest_args + ", (int)" + compile_expr(arg_ids[k])
-              else
-                rest_args = rest_args + ", " + compile_expr(arg_ids[k])
-              end
-              k = k + 1
-            end
-            emit("  printf(" + fmt_expr + rest_args + ");")
-            return 1
-          end
-        end
+        compile_printf(nid)
+        return 1
       end
     end
     0
@@ -26428,6 +26583,30 @@ class Compiler
       end
       k = k + 1
     end
+  end
+
+  def compile_printf(nid)
+    args_id = @nd_arguments[nid]
+    if args_id < 0
+      return
+    end
+    arg_ids = get_args(args_id)
+    if arg_ids.length < 1
+      return
+    end
+    fmt_expr = compile_expr(arg_ids[0])
+    rest_args = ""
+    k = 1
+    while k < arg_ids.length
+      at = infer_type(arg_ids[k])
+      if at == "int"
+        rest_args = rest_args + ", (int)" + compile_expr(arg_ids[k])
+      else
+        rest_args = rest_args + ", " + compile_expr(arg_ids[k])
+      end
+      k = k + 1
+    end
+    emit("  printf(" + fmt_expr + rest_args + ");")
   end
 
   def compile_print(nid)
