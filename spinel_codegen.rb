@@ -11343,6 +11343,13 @@ class Compiler
       scan_fiber_free_vars(elems_list[k], params, locals, free_vars, free_var_types)
       k = k + 1
     end
+ # InterpolatedStringNode parts
+    parts_list = parse_id_list(@nd_parts[nid])
+    k = 0
+    while k < parts_list.length
+      scan_fiber_free_vars(parts_list[k], params, locals, free_vars, free_var_types)
+      k = k + 1
+    end
  # Block body (for non-Fiber.new blocks)
     blk = @nd_block[nid]
     if blk >= 0
@@ -17140,17 +17147,6 @@ class Compiler
                 end
               end
               block_proc = block_forward_expr(nid, blk_types)
-              if block_proc != ""
-                if ca != ""
-                  ca = ca + ", " + block_proc
-                else
-                  ca = block_proc
-                end
-              end
-            end
-            has_block_param_239 = (owner_pt.length > 0 && owner_pt.last == "proc") ? 1 : 0
-            if has_block_param_239 == 1
-              block_proc = block_forward_expr(nid)
               if block_proc != ""
                 if ca != ""
                   ca = ca + ", " + block_proc
@@ -24736,6 +24732,12 @@ class Compiler
       scan_lambda_free_vars(elems[k], params, locals, free_vars)
       k = k + 1
     end
+    parts = parse_id_list(@nd_parts[nid])
+    k = 0
+    while k < parts.length
+      scan_lambda_free_vars(parts[k], params, locals, free_vars)
+      k = k + 1
+    end
     if @nd_collection[nid] >= 0
       scan_lambda_free_vars(@nd_collection[nid], params, locals, free_vars)
     end
@@ -25503,10 +25505,16 @@ class Compiler
     saved_in_proc_body = @in_proc_body
     saved_proc_captures = @proc_captures
     saved_proc_capture_types = @proc_capture_types
+    saved_heap_hp_names_len = @heap_promoted_names.length
+    saved_heap_hp_cells_len = @heap_promoted_cells.length
     if has_captures == 1
       @in_proc_body = 1
       @proc_captures = captures
       @proc_capture_types = capture_types
+    else
+      @in_proc_body = 0
+      @proc_captures = "".split(",")
+      @proc_capture_types = "".split(",")
     end
     push_scope
     pts = "".split("|")
@@ -25562,6 +25570,12 @@ class Compiler
     @in_proc_body = saved_in_proc_body
     @proc_captures = saved_proc_captures
     @proc_capture_types = saved_proc_capture_types
+    while @heap_promoted_names.length > saved_heap_hp_names_len
+      @heap_promoted_names.pop
+    end
+    while @heap_promoted_cells.length > saved_heap_hp_cells_len
+      @heap_promoted_cells.pop
+    end
     @out_lines = save_out
 
     if has_captures == 1
@@ -25630,9 +25644,13 @@ class Compiler
           ci = ci + 1
         end
         if already_promoted == 0
-          cell = "_hcell_" + vn + "_p" + pid.to_s
-          emit("  " + ct + " *" + cell + " = (" + ct + " *)sp_gc_alloc(sizeof(" + ct + "), NULL, NULL);")
-          emit("  *" + cell + " = " + fiber_var_ref(vn) + ";")
+          if @in_proc_body == 1 && proc_capture_index(vn) >= 0
+            cell = "_cap->" + vn
+          else
+            cell = "_hcell_" + vn + "_p" + pid.to_s
+            emit("  " + ct + " *" + cell + " = (" + ct + " *)sp_gc_alloc(sizeof(" + ct + "), NULL, NULL);")
+            emit("  *" + cell + " = " + fiber_var_ref(vn) + ";")
+          end
           @heap_promoted_names.push(vn)
           @heap_promoted_cells.push(cell)
         end
