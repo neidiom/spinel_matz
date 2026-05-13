@@ -4054,6 +4054,16 @@ class Compiler
         end
       end
     end
+ # `to_h` on a Hash variant is identity. Surface so the caller
+ # gets the recv's exact type rather than an unresolved fallback.
+    if mname == "to_h"
+      if recv >= 0
+        rt = infer_type(recv)
+        if is_hash_type(rt) == 1
+          return rt
+        end
+      end
+    end
     if mname == "fdiv"
       return "float"
     end

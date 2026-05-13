@@ -15961,6 +15961,14 @@ class Compiler
     if mname == "dig"
       return compile_hash_dig(nid, rc, recv_type)
     end
+ # `to_h` on a Hash variant is identity — return the receiver
+ # unchanged. Without this, the call falls through to the
+ # "cannot resolve" fallback and emits 0. Surfaces in
+ # view_helpers (`opts.to_h` for kwarg-to-hash interop) where
+ # `opts` is already a Hash at runtime.
+    if mname == "to_h" && is_hash_type(recv_type) == 1
+      return rc
+    end
     if recv_type == "sym_int_hash"
       if mname == "[]"
         args_id0 = @nd_arguments[nid]
