@@ -11477,6 +11477,203 @@ class Compiler
     end
   end
 
+ # Walk a body looking for `pname[<string-literal>]` index reads on
+ # `pname`. Returns 1 if any such site exists. Used by the
+ # nil-default + hash-index widening pass to decide that the param's
+ # static type should be str_str_hash rather than the mrb_int default.
+  def param_used_with_str_index?(nid, pname)
+    if nid < 0
+      return 0
+    end
+ # Don't cross nested scopes — pname may shadow.
+    if @nd_type[nid] == "DefNode"
+      return 0
+    end
+    if @nd_type[nid] == "ClassNode" || @nd_type[nid] == "ModuleNode"
+      return 0
+    end
+    if @nd_type[nid] == "CallNode" && @nd_name[nid] == "[]"
+      recv_pwi = @nd_receiver[nid]
+      if recv_pwi >= 0 && @nd_type[recv_pwi] == "LocalVariableReadNode" && @nd_name[recv_pwi] == pname
+        args_id_pwi = @nd_arguments[nid]
+        if args_id_pwi >= 0
+          a_ids_pwi = get_args(args_id_pwi)
+          if a_ids_pwi.length >= 1 && @nd_type[a_ids_pwi[0]] == "StringNode"
+            return 1
+          end
+        end
+      end
+    end
+ # Recurse into all child fields that can carry CallNode subtrees.
+    if @nd_body[nid] >= 0
+      if param_used_with_str_index?(@nd_body[nid], pname) == 1
+        return 1
+      end
+    end
+    stmts_pwi = parse_id_list(@nd_stmts[nid])
+    k = 0
+    while k < stmts_pwi.length
+      if param_used_with_str_index?(stmts_pwi[k], pname) == 1
+        return 1
+      end
+      k = k + 1
+    end
+    if @nd_expression[nid] >= 0
+      if param_used_with_str_index?(@nd_expression[nid], pname) == 1
+        return 1
+      end
+    end
+    if @nd_predicate[nid] >= 0
+      if param_used_with_str_index?(@nd_predicate[nid], pname) == 1
+        return 1
+      end
+    end
+    if @nd_subsequent[nid] >= 0
+      if param_used_with_str_index?(@nd_subsequent[nid], pname) == 1
+        return 1
+      end
+    end
+    if @nd_else_clause[nid] >= 0
+      if param_used_with_str_index?(@nd_else_clause[nid], pname) == 1
+        return 1
+      end
+    end
+    if @nd_receiver[nid] >= 0
+      if param_used_with_str_index?(@nd_receiver[nid], pname) == 1
+        return 1
+      end
+    end
+    if @nd_arguments[nid] >= 0
+      if param_used_with_str_index?(@nd_arguments[nid], pname) == 1
+        return 1
+      end
+    end
+    if @nd_block[nid] >= 0
+      if param_used_with_str_index?(@nd_block[nid], pname) == 1
+        return 1
+      end
+    end
+    if @nd_left[nid] >= 0
+      if param_used_with_str_index?(@nd_left[nid], pname) == 1
+        return 1
+      end
+    end
+    if @nd_right[nid] >= 0
+      if param_used_with_str_index?(@nd_right[nid], pname) == 1
+        return 1
+      end
+    end
+    0
+  end
+
+ # Check whether the param at index `pi` has a `nil` default value.
+ # `defaults_str` is the per-method comma-joined list of default
+ # AST node ids ("-1" for no default; otherwise the def_id).
+  def param_default_is_nil?(defaults_str, pi)
+    if defaults_str == ""
+      return 0
+    end
+    defs = defaults_str.split(",")
+    if pi >= defs.length
+      return 0
+    end
+    def_id = defs[pi].to_i
+    if def_id < 0
+      return 0
+    end
+    if @nd_type[def_id] == "NilNode"
+      return 1
+    end
+    0
+  end
+
+ # #482. A method with `def m(other = nil)` whose body does
+ # `other[key]` (Hash-receiver index read) leaves `other` at the
+ # `mrb_int` fallback when no caller passes a non-nil value. The
+ # body's `other["key"]` then falls through to `[] on int` (emits 0),
+ # the resulting local lands in a typed pointer field, and gcc fires
+ # an int-to-pointer conversion error. Worse, `return if other.nil?`
+ # / `if !v.nil?` collapse because spinel reasons about `mrb_int 0`
+ # as `Integer 0` (`.nil?` -> FALSE), losing the nil-encoded semantics.
+ #
+ # Sibling to #447 (return-path back-prop). Fix here: when the body
+ # uses an int-typed param with nil default as a String-keyed Hash
+ # receiver, widen the param's stored type to `str_str_hash`. Spinel
+ # already treats hash pointers as nullable, so the early-return /
+ # nil-guard then survives DCE.
+  def widen_nil_default_params_used_as_hash
+    mi = 0
+    while mi < @meth_names.length
+      bid = @meth_body_ids[mi]
+      if bid >= 0
+        pnames = @meth_param_names[mi].split(",")
+        ptypes = @meth_param_types[mi].split(",")
+        defaults_str_m = @meth_has_defaults[mi]
+        changed_m = 0
+        pk = 0
+        while pk < pnames.length
+          if pk < ptypes.length && ptypes[pk] == "int"
+            if param_default_is_nil?(defaults_str_m, pk) == 1
+              if param_used_with_str_index?(bid, pnames[pk]) == 1
+                ptypes[pk] = "str_str_hash"
+                changed_m = 1
+              end
+            end
+          end
+          pk = pk + 1
+        end
+        if changed_m == 1
+          @meth_param_types[mi] = ptypes.join(",")
+        end
+      end
+      mi = mi + 1
+    end
+    ci = 0
+    while ci < @cls_names.length
+      mnames = @cls_meth_names[ci].split(";")
+      bodies = @cls_meth_bodies[ci].split(";")
+      defaults_per = @cls_meth_defaults[ci].split("|")
+      cls_changed = 0
+      mj = 0
+      while mj < mnames.length
+        pnames_j = cls_meth_pnames_get(ci, mj)
+        ptypes_j = cls_meth_ptypes_get(ci, mj)
+        bid_j = -1
+        if mj < bodies.length
+          bid_j = bodies[mj].to_i
+        end
+        defaults_str_j = ""
+        if mj < defaults_per.length
+          defaults_str_j = defaults_per[mj]
+        end
+        if bid_j >= 0 && bid_j != -2
+          m_changed = 0
+          pk = 0
+          while pk < pnames_j.length
+            if pk < ptypes_j.length && ptypes_j[pk] == "int"
+              if param_default_is_nil?(defaults_str_j, pk) == 1
+                if param_used_with_str_index?(bid_j, pnames_j[pk]) == 1
+                  ptypes_j[pk] = "str_str_hash"
+                  m_changed = 1
+                end
+              end
+            end
+            pk = pk + 1
+          end
+          if m_changed == 1
+            cls_meth_ptypes_put(ci, mj, ptypes_j)
+            cls_changed = 1
+          end
+        end
+        mj = mj + 1
+      end
+      if cls_changed == 1
+        @cls_meth_ptypes_version = @cls_meth_ptypes_version + 1
+      end
+      ci = ci + 1
+    end
+  end
+
  # Widen each method's stored parameter types to encompass any
  # in-body reassignments to the parameter name. Without this,
  # a body shape like
@@ -16403,6 +16600,7 @@ class Compiler
       infer_param_array_type_from_body
       narrow_param_types_from_body_method_calls
       infer_string_param_from_body
+      widen_nil_default_params_used_as_hash
       infer_param_type_from_callee_slot
       narrow_param_hash_types_from_body_writes
  # propagate hash-each block-arg types into
