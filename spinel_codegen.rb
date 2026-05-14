@@ -16870,6 +16870,37 @@ class Compiler
     ""
   end
 
+ # 1 if `mname` is a Math module function taking exactly one
+ # argument and lowering to a libm call of the same name. Keep
+ # in sync with math_fn_returns_float? in spinel_analyze.rb —
+ # both files iterate over the same name set.
+  def math_fn_one_arg?(mname)
+    if mname == "sqrt" || mname == "cos" || mname == "sin" || mname == "tan"
+      return 1
+    end
+    if mname == "acos" || mname == "asin" || mname == "atan"
+      return 1
+    end
+    if mname == "sinh" || mname == "cosh" || mname == "tanh"
+      return 1
+    end
+    if mname == "asinh" || mname == "acosh" || mname == "atanh"
+      return 1
+    end
+    if mname == "log" || mname == "log2" || mname == "log10" || mname == "exp"
+      return 1
+    end
+    0
+  end
+
+ # 1 if `mname` is a Math module function taking two arguments.
+  def math_fn_two_arg?(mname)
+    if mname == "atan2" || mname == "hypot"
+      return 1
+    end
+    0
+  end
+
   def compile_constant_recv_expr(nid, mname, recv, rc)
     rcname = constructor_class_name(recv)
     if rcname != ""
@@ -16910,74 +16941,20 @@ class Compiler
           return "((" + idx_expr + " < sp_argv.len) ? sp_argv.data[(int)" + idx_expr + "] : NULL)"
         end
       end
- # Math
+ # Math.<fn> dispatch. Single source of truth via
+ # math_fn_one_arg? / math_fn_two_arg?; the matching analyze-side
+ # gate lives in spinel_analyze.rb:math_fn_returns_float? and
+ # additions need both files updated.
       if rcname == "Math"
-        if mname == "sqrt"
-          return "sqrt(" + compile_arg0(nid) + ")"
+        if math_fn_one_arg?(mname) == 1
+          return mname + "(" + compile_arg0(nid) + ")"
         end
-        if mname == "cos"
-          return "cos(" + compile_arg0(nid) + ")"
-        end
-        if mname == "sin"
-          return "sin(" + compile_arg0(nid) + ")"
-        end
-        if mname == "tan"
-          return "tan(" + compile_arg0(nid) + ")"
-        end
-        if mname == "acos"
-          return "acos(" + compile_arg0(nid) + ")"
-        end
-        if mname == "asin"
-          return "asin(" + compile_arg0(nid) + ")"
-        end
-        if mname == "atan"
-          return "atan(" + compile_arg0(nid) + ")"
-        end
-        if mname == "sinh"
-          return "sinh(" + compile_arg0(nid) + ")"
-        end
-        if mname == "cosh"
-          return "cosh(" + compile_arg0(nid) + ")"
-        end
-        if mname == "tanh"
-          return "tanh(" + compile_arg0(nid) + ")"
-        end
-        if mname == "asinh"
-          return "asinh(" + compile_arg0(nid) + ")"
-        end
-        if mname == "acosh"
-          return "acosh(" + compile_arg0(nid) + ")"
-        end
-        if mname == "atanh"
-          return "atanh(" + compile_arg0(nid) + ")"
-        end
-        if mname == "log"
-          return "log(" + compile_arg0(nid) + ")"
-        end
-        if mname == "log2"
-          return "log2(" + compile_arg0(nid) + ")"
-        end
-        if mname == "log10"
-          return "log10(" + compile_arg0(nid) + ")"
-        end
-        if mname == "exp"
-          return "exp(" + compile_arg0(nid) + ")"
-        end
-        if mname == "atan2"
+        if math_fn_two_arg?(mname) == 1
           args_id = @nd_arguments[nid]
           if args_id >= 0
             arg_ids = get_args(args_id)
             if arg_ids.length >= 2
-              return "atan2(" + compile_expr(arg_ids[0]) + ", " + compile_expr(arg_ids[1]) + ")"
-            end
-          end
-        end
-        if mname == "hypot"
-          args_id = @nd_arguments[nid]
-          if args_id >= 0
-            arg_ids = get_args(args_id)
-            if arg_ids.length >= 2
-              return "hypot(" + compile_expr(arg_ids[0]) + ", " + compile_expr(arg_ids[1]) + ")"
+              return mname + "(" + compile_expr(arg_ids[0]) + ", " + compile_expr(arg_ids[1]) + ")"
             end
           end
         end

@@ -4867,6 +4867,35 @@ class Compiler
     ""
   end
 
+ # 1 if `mname` is a Math module function whose return type is
+ # float (sqrt / sin / cos / tan / asin / acos / atan / sinh /
+ # cosh / tanh / asinh / acosh / atanh / log / log2 / log10 /
+ # exp / atan2 / hypot). Single point of truth so the codegen
+ # dispatch in compile_constant_recv_expr can stay aligned;
+ # adding a new Math fn means updating this list and the
+ # parallel dispatch table in spinel_codegen.rb.
+  def math_fn_returns_float?(mname)
+    if mname == "sqrt" || mname == "cos" || mname == "sin" || mname == "tan"
+      return 1
+    end
+    if mname == "acos" || mname == "asin" || mname == "atan"
+      return 1
+    end
+    if mname == "sinh" || mname == "cosh" || mname == "tanh"
+      return 1
+    end
+    if mname == "asinh" || mname == "acosh" || mname == "atanh"
+      return 1
+    end
+    if mname == "log" || mname == "log2" || mname == "log10" || mname == "exp"
+      return 1
+    end
+    if mname == "atan2" || mname == "hypot"
+      return 1
+    end
+    0
+  end
+
   def infer_math_and_misc_type(nid, mname, recv)
  # backtick
     if mname == "`"
@@ -4879,52 +4908,12 @@ class Compiler
  # `tan` / etc. on a non-Math receiver got typed as float
  # regardless — e.g. a `def log; @log; end` accessor returning a
  # str_array got misinferred as float and downstream
- # `router.log[i]` read as a float-index. Gate the whole math
- # block on recv shape and let infer_recv_method_type handle the
- # non-Math case.
+ # `router.log[i]` read as a float-index. The list is kept in
+ # sync with the parallel dispatch in
+ # `compile_constant_recv_expr`'s `if rcname == "Math"` block;
+ # additions need both sides updated.
     if recv < 0 || (@nd_type[recv] == "ConstantReadNode" && @nd_name[recv] == "Math")
-      if mname == "sqrt"
-        return "float"
-      end
-      if mname == "cos"
-        return "float"
-      end
-      if mname == "sin"
-        return "float"
-      end
-      if mname == "tan"
-        return "float"
-      end
-      if mname == "acos" || mname == "asin" || mname == "atan"
-        return "float"
-      end
- # Hyperbolic + inverse hyperbolic — same C99 libm wrappers as the
- # circular ones above. Issue: returning "float" here lets call sites
- # that lift `Math.tanh(x)` into a non-Float context (e.g. into an
- # IntArray slot via `arr[i] = Math.tanh(x)`) get caught at type-
- # check time instead of silently emitting `0`.
-      if mname == "sinh" || mname == "cosh" || mname == "tanh"
-        return "float"
-      end
-      if mname == "asinh" || mname == "acosh" || mname == "atanh"
-        return "float"
-      end
-      if mname == "log"
-        return "float"
-      end
-      if mname == "log2"
-        return "float"
-      end
-      if mname == "log10"
-        return "float"
-      end
-      if mname == "exp"
-        return "float"
-      end
-      if mname == "atan2"
-        return "float"
-      end
-      if mname == "hypot"
+      if math_fn_returns_float?(mname) == 1
         return "float"
       end
     end
