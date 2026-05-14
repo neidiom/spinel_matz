@@ -23215,6 +23215,14 @@ class Compiler
  # long long) and strcmp would reject it.
           if @nd_type[cid] == "SymbolNode"
             result = result + "0"
+ # `case <string> when ClassConst` — Module#===: matches when
+ # the recv is an instance of ClassConst. For a string predicate,
+ # only `when String` matches; other built-in class constants
+ # never match. Without this branch the generic strcmp arm
+ # below tried to compare the sp_Class struct with the string
+ # tmp, tripping the C compile.
+          elsif @nd_type[cid] == "ConstantReadNode" && not_in(@nd_name[cid], @builtin_class_names) == 0
+            result = result + (@nd_name[cid] == "String" ? "1" : "0")
           else
             result = result + "strcmp(" + tmp + ", " + compile_expr(cid) + ") == 0"
           end
@@ -23225,6 +23233,35 @@ class Compiler
  # char *` type mismatch in the generated C.
           if pred_type == "symbol" && @nd_type[cid] == "StringNode"
             result = result + "0"
+ # `case <scalar> when ClassConst` — Module#=== resolution
+ # against the predicate's known kind. Matches when the
+ # class name corresponds to the predicate's type (Integer
+ # for int, Float for float, Symbol for symbol, TrueClass /
+ # FalseClass for bool); otherwise no match. Same shape as
+ # the string-predicate branch above; without this the
+ # generic equality arm would compare an sp_Class struct to
+ # an mrb_int / mrb_float / etc.
+          elsif @nd_type[cid] == "ConstantReadNode" && not_in(@nd_name[cid], @builtin_class_names) == 0
+            cname_w2 = @nd_name[cid]
+            matches_pw = 0
+            if pred_type == "int"
+              if cname_w2 == "Integer" || cname_w2 == "Numeric"
+                matches_pw = 1
+              end
+            elsif pred_type == "float"
+              if cname_w2 == "Float" || cname_w2 == "Numeric"
+                matches_pw = 1
+              end
+            elsif pred_type == "symbol"
+              if cname_w2 == "Symbol"
+                matches_pw = 1
+              end
+            elsif pred_type == "bool"
+              if cname_w2 == "TrueClass" || cname_w2 == "FalseClass"
+                matches_pw = 1
+              end
+            end
+            result = result + matches_pw.to_s
           else
             result = result + tmp + " == " + compile_expr(cid)
           end
