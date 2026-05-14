@@ -7727,6 +7727,15 @@ class Compiler
     end
   end
 
+  def scalar_ivar_type?(t)
+    t == "int" || t == "float" || t == "bool" || t == "symbol"
+  end
+
+  def nil_scalar_ivar_mix?(old_type, new_type)
+    (old_type == "nil" && scalar_ivar_type?(new_type)) ||
+      (new_type == "nil" && scalar_ivar_type?(old_type))
+  end
+
   def update_ivar_type(ci, iname, new_type)
     names = @cls_ivar_names[ci].split(";")
     types = @cls_ivar_types[ci].split(";")
@@ -7779,7 +7788,8 @@ class Compiler
  # `@m = method(:foo)` initially scans as int and a
  # refinement promotes it to `obj_Method` — no heterogeneity
  # to widen for).
-          if (old == "int" || old == "nil") && is_obj_type(new_type) == 1 && cls_ivar_definite_flag(ci, iname) == 1
+          if nil_scalar_ivar_mix?(old, new_type) ||
+              ((old == "int" || old == "nil") && is_obj_type(new_type) == 1 && cls_ivar_definite_flag(ci, iname) == 1)
             types[k] = "poly"
             @needs_rb_value = 1
             @cls_ivar_types[ci] = types.join(";")
@@ -8071,7 +8081,7 @@ class Compiler
             if new_def == 1 && cur_def == 1 && cur != vtype && cur != "poly"
               replace_ivar_type(ci, iname, "poly")
               @needs_rb_value = 1
-            elsif vtype != "int"
+            elsif vtype != "int" || cur == "nil"
               update_ivar_type(ci, iname, vtype)
             end
           end
@@ -10996,7 +11006,14 @@ class Compiler
                           if ij < ivar_types.length
                             if ivar_names[ij] == iname
                               if ptypes[pi] != ""
-                                ivar_types[ij] = unify_call_types(ivar_types[ij], ptypes[pi], -1)
+                                old_t = ivar_types[ij]
+                                new_t = ptypes[pi]
+                                if nil_scalar_ivar_mix?(old_t, new_t)
+                                  ivar_types[ij] = "poly"
+                                  @needs_rb_value = 1
+                                else
+                                  ivar_types[ij] = unify_call_types(old_t, new_t, -1)
+                                end
                               end
                             end
                           end
@@ -13763,23 +13780,21 @@ class Compiler
  # Chain participants bypass the `int` guard so that
  # `@string_slot = @int_slot = expr_returning_int` widens
  # the head to poly instead of leaving it stuck at
- # `string`. The `nil` guard stays in place even for
- # chains: `@a = @b = ... = nil` is handled at emit time
- # by `compile_chained_ivar_writes`'s per-slot recurse
- # path (NilNode lowers to a literal `0`, a null pointer
- # constant valid for any slot type), and forcing nil
- # into the slot type interacts badly with parent-cascade
- # update_ivar_type — a subclass write that pins the same
- # slot to a concrete obj type ping-pongs between obj_X
- # and obj_X? across iter rounds and lands on poly,
- # breaking the typed-pointer store at emit time.
+ # `string`. Plain `nil` writes are routed through
+ # update_ivar_type when the current slot is scalar; object
+ # nil writes stay on the existing nullable/finalize paths to
+ # avoid parent-cascade ping-pong across passes.
           if chain_inames.length > 1 && at == "int"
             ci_idx = 0
             while ci_idx < chain_inames.length
               update_ivar_type(@current_class_idx, chain_inames[ci_idx], at)
               ci_idx = ci_idx + 1
             end
-          elsif at != "int" && at != "nil"
+          elsif at == "nil"
+            if scalar_ivar_type?(cls_ivar_type(@current_class_idx, iname))
+              update_ivar_type(@current_class_idx, iname, at)
+            end
+          elsif at != "int" || cls_ivar_type(@current_class_idx, iname) == "nil"
             update_ivar_type(@current_class_idx, iname, at)
           end
         end
