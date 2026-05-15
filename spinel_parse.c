@@ -146,22 +146,28 @@ static long long pm_int_value(pm_integer_t *integer) {
   uint64_t val = 0;
   uint64_t max_positive = (uint64_t)LLONG_MAX;
   uint64_t max_negative = max_positive + 1ULL;
+  const size_t limb_bits = 32;
+  const size_t value_bits = sizeof(val) * CHAR_BIT;
+  int overflow = 0;
 
   if (integer->values == NULL) {
     val = (uint64_t)integer->value;
-  } else if (integer->length <= 2) {
-    for (size_t i = 0; i < integer->length; i++) {
-      val |= ((uint64_t)integer->values[i]) << (i * 32);
-    }
   } else {
-    val = integer->negative ? max_negative : max_positive;
+    for (size_t i = 0; i < integer->length; i++) {
+      if (i >= value_bits / limb_bits) {
+        if (integer->values[i] != 0) overflow = 1;
+        continue;
+      }
+      size_t shift = i * limb_bits;
+      val |= ((uint64_t)integer->values[i]) << shift;
+    }
   }
 
   if (integer->negative) {
-    if (val >= max_negative) return LLONG_MIN;
+    if (overflow || val >= max_negative) return LLONG_MIN;
     return -(long long)val;
   }
-  if (val > max_positive) return LLONG_MAX;
+  if (overflow || val > max_positive) return LLONG_MAX;
   return (long long)val;
 }
 
