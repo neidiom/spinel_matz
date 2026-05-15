@@ -22060,7 +22060,24 @@ class Compiler
         recv_cs = @nd_receiver[nid]
         cs_mname = @nd_name[nid]
         match = 0
-        if recv_cs >= 0 && @nd_type[recv_cs] == "ConstantReadNode" && @nd_name[recv_cs] == cname
+ # Direct `Cname.new(...)` (top-level class) vs module-scoped
+ # `Mod::Cname.new(...)`. cname is the flattened storage form
+ # (e.g. `M_Holder` for `module M; class Holder`), so the
+ # ConstantPathNode receiver has to be flattened the same way
+ # to compare. Without this arm the walker bailed on any
+ # module-scoped class and the poly-recv recovery (af55659)
+ # fell back to all-classes -- M::Server got pulled into the
+ # M::Holder.use dispatch table even though no M::Server is
+ # ever assigned to @w. Issue #531, sibling to #513.
+        recv_match = 0
+        if recv_cs >= 0
+          if @nd_type[recv_cs] == "ConstantReadNode" && @nd_name[recv_cs] == cname
+            recv_match = 1
+          elsif @nd_type[recv_cs] == "ConstantPathNode" && const_ref_flat_name(recv_cs) == cname
+            recv_match = 1
+          end
+        end
+        if recv_match == 1
           if want_new && cs_mname == "new"
             match = 1
           elsif !want_new && cs_mname == meth_name
