@@ -3132,6 +3132,14 @@ class Compiler
         if lt == "mutable_str"
           return "mutable_str"
         end
+ # `string << x` lowers to sp_str_concat which returns a fresh
+ # `const char *`. Without this arm the inference fell back to
+ # `int` and the surrounding `p` / interpolation emitted
+ # `sp_int_to_s(<string-ptr>)` and printed a meaningless integer
+ # (issue #504 send(:<<) follow-up).
+        if lt == "string"
+          return "string"
+        end
  # Array `<<` returns the recv (so `(arr << x) << y` chains).
         if is_array_type(lt) == 1
           return lt

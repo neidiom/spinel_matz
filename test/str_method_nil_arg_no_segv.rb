@@ -7,13 +7,16 @@
 # Fix: NULL guards in sp_str_count / sp_str_delete /
 # sp_str_rindex / sp_str_concat; setbyte (which would have
 # written through a read-only string literal) is now warned and
-# returns 0 without mutating. The send(:<<) shape isn't covered
-# here -- it doesn't crash but inherits a misinferred return
-# type from the inner sp_str_concat, so the output is meaningless.
+# returns 0 without mutating; rindex with a regex arg routes
+# through the new sp_re_rindex helper instead of the plain
+# string-substring path; `<<` on a string return-types as
+# `string` instead of falling through to the catch-all `int`.
 
 p "foo".count    # CRuby: ArgumentError. spinel: 0 (was: SEGV)
 p "foo".delete   # CRuby: ArgumentError. spinel: "foo" unchanged (was: SEGV)
-p "foo".rindex(/missing/)  # CRuby: nil. spinel: -1 (was: SEGV; no regex rindex helper yet)
+p "foo".rindex(/missing/)  # CRuby: nil. spinel: -1 (was: SEGV)
+p "abcdabcd".rindex(/c/)   # CRuby & spinel: 6 (new sp_re_rindex helper)
+p "foo".send(:<<)          # CRuby: ArgumentError. spinel: "foo" (was: meaningless int)
 
 # setbyte on a literal: CRuby returns the int and mutates the
 # string in place. Spinel strings are `const char *` so we

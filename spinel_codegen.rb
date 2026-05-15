@@ -14551,6 +14551,19 @@ class Compiler
       return "sp_str_index(" + rc + ", " + compile_arg0(nid) + ")"
     end
     if mname == "rindex"
+      args_id_ri = @nd_arguments[nid]
+      if args_id_ri >= 0
+        a_ri = get_args(args_id_ri)
+        if a_ri.length >= 1
+ # `s.rindex(/regex/)` routes through sp_re_rindex; the plain
+ # string variant (sp_str_rindex) would have lowered the regex
+ # pat to `0` and crashed at strlen(NULL). Issue #504.
+          rpat_ri = regex_pat_c_expr(a_ri[0])
+          if rpat_ri != ""
+            return "sp_re_rindex(" + rpat_ri + ", " + rc + ")"
+          end
+        end
+      end
       return "sp_str_rindex(" + rc + ", " + compile_arg0(nid) + ")"
     end
     if mname == "tr"

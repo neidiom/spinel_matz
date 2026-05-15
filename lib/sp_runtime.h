@@ -973,6 +973,32 @@ static mrb_int sp_re_match(mrb_regexp_pattern *pat, const char *str) {
   return 0;
 }
 
+/* `s.rindex(regex)` — last match start, in BYTE offset (matches
+   the way sp_str_rindex reports indices for plain-string search;
+   codepoint translation would require a UTF-8 walk and the
+   handful of call sites that consume rindex don't need it).
+   Walks forward through successive matches and remembers the
+   latest start. Issue #504: previously the codegen routed
+   `s.rindex(/re/)` to sp_str_rindex(s, 0) and SEGV'd at
+   strlen(NULL). Returns -1 on no match. */
+static mrb_int sp_re_rindex(mrb_regexp_pattern *pat, const char *str) {
+  int64_t slen = (int64_t)strlen(str);
+  int caps[2];
+  int64_t pos = 0;
+  mrb_int last = -1;
+  while (pos <= slen) {
+    int n = re_exec(pat, str, slen, pos, caps, 2);
+    if (n <= 0) break;
+    last = caps[0];
+    /* Advance past the match; for zero-width matches step by 1
+       to avoid an infinite loop. */
+    int64_t next = caps[1];
+    if (next <= pos) next = pos + 1;
+    pos = next;
+  }
+  return last;
+}
+
 static mrb_bool sp_re_match_p(mrb_regexp_pattern *pat, const char *str) {
   int64_t slen = (int64_t)strlen(str);
   int caps[2];
