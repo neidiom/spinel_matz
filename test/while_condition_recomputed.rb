@@ -11,3 +11,45 @@ end
 
 puts sum
 puts items.length
+
+items2 = [4, 5, 6]
+sum2 = 0
+
+while items2.length > 0
+  sum2 += items2.pop
+end
+
+puts sum2
+puts items2.length
+
+items3 = [7, 8, 9]
+packed = 0
+
+while items3.length != 0
+  packed = packed * 10 + items3.shift
+end
+
+puts packed
+puts items3.length
+
+class IvarDrain
+  def initialize
+    @items = [10, 20, 30]
+  end
+
+  def drain
+    sum = 0
+    while @items.length > 0
+      sum += @items.pop
+    end
+    sum
+  end
+
+  def remaining
+    @items.length
+  end
+end
+
+drain = IvarDrain.new
+puts drain.drain
+puts drain.remaining
