@@ -4549,6 +4549,26 @@ class Compiler
       if args_id >= 0
         aargs = get_args(args_id)
         if aargs.length > 0
+ # `arr.reduce(:op)` / `inject(:op)` (binary-op symbol form):
+ # the result is the array's element type, not the symbol type.
+ # Issue #506: without this arm, `[1,2,3,4].reduce(:*)` typed as
+ # `symbol` and `p`-inspected as `:<sym-name-of-24>` instead of
+ # printing `24`.
+          if aargs.length == 1 && @nd_type[aargs[0]] == "SymbolNode"
+            sop = @nd_content[aargs[0]]
+            if sop == "+" || sop == "*" || sop == "-" || sop == "/" || sop == "%" || sop == "&" || sop == "|" || sop == "^"
+              if recv >= 0
+                rt_inj = infer_type(recv)
+                if rt_inj == "int_array"
+                  return "int"
+                end
+                if rt_inj == "float_array"
+                  return "float"
+                end
+              end
+              return "int"
+            end
+          end
           return infer_type(aargs[0])
         end
       end

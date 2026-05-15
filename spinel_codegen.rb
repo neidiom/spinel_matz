@@ -15841,6 +15841,16 @@ class Compiler
       if mname == "sum"
         return "sp_IntArray_sum(" + rc + ", " + compile_arg0_as_int(nid) + ")"
       end
+ # `arr.reduce(:op)` / `arr.inject(:op)` for arithmetic op
+ # symbols on int_array. Issue #506. Block form is handled at
+ # the generic poly path; here we fold inline for the
+ # symbol-arg shape. Empty array returns 0 (not nil, which
+ # int_array can't carry). Inlined call to reduce_sym_op_for
+ # since adding new locals to this large emit method tripped
+ # self-host scan_locals (see feedback_self_host_recursive_fn_arm).
+      if (mname == "reduce" || mname == "inject") && reduce_sym_op_for(nid) != ""
+        return "({ sp_IntArray *_arr = " + rc + "; mrb_int _acc = _arr->len > 0 ? sp_IntArray_get(_arr, 0) : 0; for (mrb_int _i = 1; _i < _arr->len; _i++) _acc = _acc " + reduce_sym_op_for(nid) + " sp_IntArray_get(_arr, _i); _acc; })"
+      end
       if mname == "to_a"
         return "sp_IntArray_dup(" + rc + ")"
       end
@@ -16997,6 +17007,32 @@ class Compiler
       if @nd_block[nid] >= 0
         return compile_reduce_expr(nid)
       end
+    end
+    ""
+  end
+
+ # Returns the C op token ("+", "*", ...) when `nid` is an
+ # `arr.reduce(:op)` / `arr.inject(:op)` call with a single
+ # SymbolNode arg naming an inlinable binary arithmetic /
+ # bitwise op. Else "". Issue #506. Pulled out of the
+ # int_array dispatch so the emit site has no new locals
+ # (the dispatch method is large and adding scope tripped
+ # self-host scan_locals; see feedback_self_host_recursive_fn_arm).
+  def reduce_sym_op_for(nid)
+    args_id = @nd_arguments[nid]
+    if args_id < 0
+      return ""
+    end
+    args = get_args(args_id)
+    if args.length != 1
+      return ""
+    end
+    if @nd_type[args[0]] != "SymbolNode"
+      return ""
+    end
+    op = @nd_content[args[0]]
+    if op == "+" || op == "*" || op == "-" || op == "/" || op == "%" || op == "&" || op == "|" || op == "^"
+      return op
     end
     ""
   end
