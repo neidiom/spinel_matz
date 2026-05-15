@@ -16196,6 +16196,19 @@ class Compiler
       if mname == "empty?"
         return "sp_PtrArray_empty(" + rc + ")"
       end
+ # issue #526: join on mutable_str_ptr_array. #522 added the
+ # element-type tag (a sp_PtrArray of sp_String*) but no method
+ # dispatch — `xs.map { String.new }.join(",")` fell through to
+ # the unresolved-call warning and emitted 0. The runtime helper
+ # mirrors sp_StrArray_join, but reads each entry's bytes via the
+ # sp_String data/len pair.
+      if mname == "join" && elem_type == "mutable_str"
+        jarg = compile_arg0(nid)
+        if jarg == "0"
+          jarg = "\"\""
+        end
+        return "sp_PtrArray_str_join(" + rc + ", " + jarg + ")"
+      end
  # transpose for [[Int]] (int_array_ptr_array). Other
  # nested-array element shapes are not yet supported and fall
  # through to the unresolved-call warning.
