@@ -2180,6 +2180,18 @@ class Compiler
       end
       return infer_type(@nd_expression[nid])
     end
+    if t == "MultiWriteNode"
+ # `(a, b = 10, 11)` as an expression returns the RHS array.
+ # The rhs ArrayNode's type infers normally; the wrapping
+ # MWN takes the same type. Without this branch infer_type
+ # falls back to int and downstream `[1]` lowers to bit
+ # extraction on 0. Issue #554.
+      val_id_mw = @nd_expression[nid]
+      if val_id_mw >= 0
+        return infer_type(val_id_mw)
+      end
+      return "int"
+    end
     if t == "IndexOrWriteNode" || t == "IndexAndWriteNode" || t == "IndexOperatorWriteNode"
  # `recv[k] ||= v` (etc.) as an expression value. The result type
  # is the recv's element type — same shape as Hash#[] / Array#[]

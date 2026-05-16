@@ -10870,6 +10870,80 @@ class Compiler
       compile_stmt(nid)
       return ivar_lhs(@nd_name[nid])
     end
+ # `(a, b = 10, 11)` used as an expression -- CRuby returns the
+ # RHS array. Pre-fix compile_expr fell through to "0" and the
+ # outer subscript / chained read read the wrong value. Issue
+ # #554. Only the all-int homogeneous RHS shape is handled
+ # here; other shapes still fall through to the default and
+ # the warning surfaces at the consumer site.
+    if t == "MultiWriteNode"
+      val_id_mw = @nd_expression[nid]
+      targets_mw = parse_id_list(@nd_targets[nid])
+      if val_id_mw >= 0 && @nd_type[val_id_mw] == "ArrayNode"
+        elems_mw = parse_id_list(@nd_elements[val_id_mw])
+        all_int_mw = 1
+        all_str_mw = 1
+        kmw = 0
+        while kmw < elems_mw.length
+          et_mw = infer_type(elems_mw[kmw])
+          if et_mw != "int"
+            all_int_mw = 0
+          end
+          if et_mw != "string"
+            all_str_mw = 0
+          end
+          kmw = kmw + 1
+        end
+        rhs_tmps = "".split(",")
+        rhs_ts = "".split(",")
+        kmw = 0
+        while kmw < elems_mw.length
+          et_mw = infer_type(elems_mw[kmw])
+          tmp_mw = new_temp
+          emit("  " + c_type(et_mw) + " " + tmp_mw + " = " + compile_expr(elems_mw[kmw]) + ";")
+          rhs_tmps.push(tmp_mw)
+          rhs_ts.push(et_mw)
+          kmw = kmw + 1
+        end
+        @needs_gc = 1
+        arr_tmp = new_temp
+        if all_int_mw == 1
+          @needs_int_array = 1
+          emit("  sp_IntArray *" + arr_tmp + " = sp_IntArray_new();")
+          kmw = 0
+          while kmw < rhs_tmps.length
+            emit("  sp_IntArray_push(" + arr_tmp + ", " + rhs_tmps[kmw] + ");")
+            kmw = kmw + 1
+          end
+        elsif all_str_mw == 1
+          @needs_str_array = 1
+          emit("  sp_StrArray *" + arr_tmp + " = sp_StrArray_new();")
+          kmw = 0
+          while kmw < rhs_tmps.length
+            emit("  sp_StrArray_push(" + arr_tmp + ", " + rhs_tmps[kmw] + ");")
+            kmw = kmw + 1
+          end
+        else
+          @needs_rb_value = 1
+          emit("  sp_PolyArray *" + arr_tmp + " = sp_PolyArray_new();")
+          kmw = 0
+          while kmw < rhs_tmps.length
+            emit("  sp_PolyArray_push(" + arr_tmp + ", " + box_value_to_poly(rhs_ts[kmw], rhs_tmps[kmw]) + ");")
+            kmw = kmw + 1
+          end
+        end
+        kmw = 0
+        while kmw < targets_mw.length
+          if kmw < rhs_tmps.length
+            emit_multi_write_target(targets_mw[kmw], rhs_tmps[kmw], rhs_ts[kmw])
+          end
+          kmw = kmw + 1
+        end
+        return arr_tmp
+      end
+      compile_multi_write(nid)
+      return "0"
+    end
     if t == "LocalVariableWriteNode"
  # `local = expr` used as an expression (e.g. inside a chained
  # `@a = local = expr` write, or `if (sprite = arr[i])` in a
