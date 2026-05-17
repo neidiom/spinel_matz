@@ -144,7 +144,7 @@ fi
 # without seeds. Real failures during extraction warn to stderr.
 if [ -n "$RBS_DIR" ] && [ -x "$RBS_EXTRACT_BIN" ] && [ -d "$RBS_DIR" ]; then
   SEED_TMP="$(mktemp /tmp/spinel_seed.XXXXXX)"
-  if ! "$RBS_EXTRACT_BIN" "$RBS_DIR" > "$SEED_TMP" 2>/dev/null; then
+  if ! "$RBS_EXTRACT_BIN" "$RBS_DIR" > "$SEED_TMP"; then
     echo "spinel: --rbs extraction failed; proceeding without seeds" >&2
     rm -f "$SEED_TMP"
     SEED_TMP=""

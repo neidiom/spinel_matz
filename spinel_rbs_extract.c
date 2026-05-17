@@ -1,5 +1,5 @@
-/* spinel_rbs_extract -- read sig/**/ /*.rbs, emit a seed file for
- * spinel_analyze's --rbs path.
+/* spinel_rbs_extract -- walk a directory for .rbs files and emit a
+ * seed file for spinel_analyze's --rbs path.
  *
  * Reads RBS source through the vendored rbs C parser (vendor/rbs/) and
  * emits a tiny line-oriented seed format consumed by load_rbs_seeds /
@@ -58,7 +58,12 @@ static void sbuf_grow(sbuf_t *s, size_t need) {
     if (s->cap >= need) return;
     size_t ncap = s->cap == 0 ? 64 : s->cap;
     while (ncap < need) ncap *= 2;
-    s->buf = (char *) realloc(s->buf, ncap);
+    char *nbuf = (char *) realloc(s->buf, ncap);
+    if (nbuf == NULL) {
+        fprintf(stderr, "spinel_rbs_extract: out of memory\n");
+        exit(1);
+    }
+    s->buf = nbuf;
     s->cap = ncap;
 }
 
@@ -631,7 +636,12 @@ static void walk(const char *path, FILE *out) {
     while ((ent = readdir(d)) != NULL) {
         if (ent->d_name[0] == '.') continue;
         char full[4096];
-        snprintf(full, sizeof(full), "%s/%s", path, ent->d_name);
+        int n = snprintf(full, sizeof(full), "%s/%s", path, ent->d_name);
+        if (n < 0 || (size_t) n >= sizeof(full)) {
+            fprintf(stderr, "spinel_rbs_extract: path too long, skipping: %s/%s\n",
+                    path, ent->d_name);
+            continue;
+        }
         walk(full, out);
     }
     closedir(d);
