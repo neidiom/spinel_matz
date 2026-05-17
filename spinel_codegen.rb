@@ -6885,6 +6885,7 @@ class Compiler
     emit_raw("static sp_IntArray*sp_SymIntHash_values(sp_SymIntHash*h){sp_IntArray*a=sp_IntArray_new();for(mrb_int i=0;i<h->len;i++)sp_IntArray_push(a,sp_SymIntHash_get(h,h->order[i]));return a;}")
     emit_raw("static sp_SymIntHash*sp_SymIntHash_dup(sp_SymIntHash*h){sp_SymIntHash*r=sp_SymIntHash_new();for(mrb_int i=0;i<h->len;i++)sp_SymIntHash_set(r,h->order[i],sp_SymIntHash_get(h,h->order[i]));return r;}")
     emit_raw("static sp_SymIntHash*sp_SymIntHash_merge(sp_SymIntHash*a,sp_SymIntHash*b){sp_SymIntHash*r=sp_SymIntHash_new();for(mrb_int i=0;i<a->len;i++)sp_SymIntHash_set(r,a->order[i],sp_SymIntHash_get(a,a->order[i]));if(b){for(mrb_int i=0;i<b->len;i++)sp_SymIntHash_set(r,b->order[i],sp_SymIntHash_get(b,b->order[i]));}return r;}")
+    emit_raw("static mrb_bool sp_SymIntHash_eq(sp_SymIntHash*a,sp_SymIntHash*b){if(!a||!b)return a==b;if(a->len!=b->len)return FALSE;for(mrb_int i=0;i<a->len;i++){sp_sym k=a->order[i];if(!sp_SymIntHash_has_key(b,k))return FALSE;if(sp_SymIntHash_get(a,k)!=sp_SymIntHash_get(b,k))return FALSE;}return TRUE;}")
  # Hash inspect — Ruby's modern shorthand `{k: v, ...}`. All keys
  # in a sym_int_hash are valid identifier symbols (the parser only
  # routes literal symbol keys here), so the bare-name form always
@@ -6915,6 +6916,7 @@ class Compiler
     emit_raw("static sp_StrArray*sp_SymStrHash_values(sp_SymStrHash*h){sp_StrArray*a=sp_StrArray_new();for(mrb_int i=0;i<h->len;i++)sp_StrArray_push(a,sp_SymStrHash_get(h,h->order[i]));return a;}")
     emit_raw("static sp_SymStrHash*sp_SymStrHash_dup(sp_SymStrHash*h){sp_SymStrHash*r=sp_SymStrHash_new();for(mrb_int i=0;i<h->len;i++)sp_SymStrHash_set(r,h->order[i],sp_SymStrHash_get(h,h->order[i]));return r;}")
     emit_raw("static sp_SymStrHash*sp_SymStrHash_merge(sp_SymStrHash*a,sp_SymStrHash*b){sp_SymStrHash*r=sp_SymStrHash_new();for(mrb_int i=0;i<a->len;i++)sp_SymStrHash_set(r,a->order[i],sp_SymStrHash_get(a,a->order[i]));for(mrb_int i=0;i<b->len;i++)sp_SymStrHash_set(r,b->order[i],sp_SymStrHash_get(b,b->order[i]));return r;}")
+    emit_raw("static mrb_bool sp_SymStrHash_eq(sp_SymStrHash*a,sp_SymStrHash*b){if(!a||!b)return a==b;if(a->len!=b->len)return FALSE;for(mrb_int i=0;i<a->len;i++){sp_sym k=a->order[i];if(!sp_SymStrHash_has_key(b,k))return FALSE;if(!sp_str_eq(sp_SymStrHash_get(a,k),sp_SymStrHash_get(b,k)))return FALSE;}return TRUE;}")
  # Cross-variant merge: when a `sym_str_hash` and a `sym_poly_hash`
  # are merged in either direction, both result paths return a
  # fresh sym_poly_hash with the str entries boxed via sp_box_str.
@@ -15035,6 +15037,18 @@ class Compiler
       return "sp_str_strip(" + rc + ")"
     end
     if mname == "chomp"
+ # chomp(nil) is a no-op in CRuby (nil arg means "no
+ # separator", returning the receiver unchanged). chomp("")
+ # is paragraph mode (strip trailing newlines only); the
+ # no-arg / non-nil arg path strips the default separator.
+ # Issue #555 case 10.
+      args_id_cm = @nd_arguments[nid]
+      if args_id_cm >= 0
+        a_cm = get_args(args_id_cm)
+        if a_cm.length > 0 && @nd_type[a_cm[0]] == "NilNode"
+          return rc
+        end
+      end
       return "sp_str_chomp(" + rc + ")"
     end
     if mname == "chop"
@@ -16466,6 +16480,15 @@ class Compiler
         args_id = @nd_arguments[nid]
         if args_id >= 0
           a_set = get_args(args_id)
+ # Slice assignment `a[i, n] = rhs` (3 args) isn't lowered
+ # to a runtime slice splice; the assignment side becomes a
+ # no-op but the expression value must still be the RHS per
+ # CRuby semantics. Issue #555 case 08.
+          if a_set.length >= 3
+            val_tmp = new_temp
+            emit("  mrb_int " + val_tmp + " = " + compile_expr(a_set[a_set.length - 1]) + ";")
+            return val_tmp
+          end
           if a_set.length >= 2
             idx_tmp = new_temp
             val_tmp = new_temp
@@ -20565,12 +20588,73 @@ class Compiler
         end
       end
     end
-    if lt == "int_array"
-      if at == "int_array"
+ # IntArray-backed equality (int_array, sym_array, and the
+ # cross combination -- a `<<`-ed sym-tagged push leaves the
+ # static type as int_array but the runtime values are sym
+ # ids; both sides share the IntArray layout so the helper
+ # is sound). Issue #555.
+    if (lt == "int_array" || lt == "sym_array") && (at == "int_array" || at == "sym_array")
+      if op == "=="
+        return "sp_IntArray_eq((sp_IntArray *)(" + lc + "), (sp_IntArray *)(" + rc + "))"
+      else
+        return "(!sp_IntArray_eq((sp_IntArray *)(" + lc + "), (sp_IntArray *)(" + rc + ")))"
+      end
+    end
+    if lt == "str_array" && at == "str_array"
+      if op == "=="
+        return "sp_StrArray_eq(" + lc + ", " + rc + ")"
+      else
+        return "(!sp_StrArray_eq(" + lc + ", " + rc + "))"
+      end
+    end
+    if lt == "float_array" && at == "float_array"
+      if op == "=="
+        return "sp_FloatArray_eq(" + lc + ", " + rc + ")"
+      else
+        return "(!sp_FloatArray_eq(" + lc + ", " + rc + "))"
+      end
+    end
+    if lt == "poly_array" && at == "poly_array"
+      if op == "=="
+        return "sp_PolyArray_eq(" + lc + ", " + rc + ")"
+      else
+        return "(!sp_PolyArray_eq(" + lc + ", " + rc + "))"
+      end
+    end
+ # Hash equality arms. Same shape as the typed-array arms
+ # above. Issue #555. Compares by sorted key set + per-key
+ # value equality (each variant's _eq helper handles its
+ # value type's comparison: int via ==, string via sp_str_eq,
+ # poly via sp_poly_eq).
+    if is_hash_type(lt) == 1 && lt == at
+      hash_eq_fn = ""
+      if lt == "str_int_hash"
+        hash_eq_fn = "sp_StrIntHash_eq"
+      elsif lt == "str_str_hash"
+        hash_eq_fn = "sp_StrStrHash_eq"
+      elsif lt == "int_str_hash"
+        hash_eq_fn = "sp_IntStrHash_eq"
+      elsif lt == "sym_int_hash"
+        hash_eq_fn = "sp_SymIntHash_eq"
+        @needs_sym_int_hash = 1
+      elsif lt == "sym_str_hash"
+        hash_eq_fn = "sp_SymStrHash_eq"
+        @needs_sym_str_hash = 1
+      elsif lt == "str_poly_hash"
+        hash_eq_fn = "sp_StrPolyHash_eq"
+        @needs_str_poly_hash = 1
+      elsif lt == "sym_poly_hash"
+        hash_eq_fn = "sp_SymPolyHash_eq"
+        @needs_sym_poly_hash = 1
+      elsif lt == "poly_poly_hash"
+        hash_eq_fn = "sp_PolyPolyHash_eq"
+        @needs_poly_poly_hash = 1
+      end
+      if hash_eq_fn != ""
         if op == "=="
-          return "sp_IntArray_eq(" + lc + ", " + rc + ")"
+          return hash_eq_fn + "(" + lc + ", " + rc + ")"
         else
-          return "(!sp_IntArray_eq(" + lc + ", " + rc + "))"
+          return "(!" + hash_eq_fn + "(" + lc + ", " + rc + "))"
         end
       end
     end
