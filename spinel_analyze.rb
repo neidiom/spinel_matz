@@ -23019,7 +23019,12 @@ class Compiler
                                 cur == "int_str_hash" ||
                                 cur == "sym_int_hash" ||
                                 cur == "sym_str_hash")
-                  if promotable && ki < @scan_empty_hash_flags.length && @scan_empty_hash_flags[ki] == "1"
+                  if promotable
+                    key_type = scan_locals_arg_type(aargs[0], names, types, params)
+                    val_type = scan_locals_arg_type(aargs[aargs.length - 1], names, types, params)
+                    started_empty = (ki < @scan_empty_hash_flags.length && @scan_empty_hash_flags[ki] == "1")
+                    promoted = ""
+                    if started_empty == 1
  # Block params (e.g. `|k, v|` in `each`) aren't
  # yet `declare_var`'d when scan_locals walks
  # the block body, so a bare `infer_type(v)`
@@ -23028,9 +23033,54 @@ class Compiler
  # `types[]`. Prefer that local types array when
  # the argument is a LocalVariableReadNode we
  # recorded; fall back to infer_type otherwise.
-                    key_type = scan_locals_arg_type(aargs[0], names, types, params)
-                    val_type = scan_locals_arg_type(aargs[aargs.length - 1], names, types, params)
-                    promoted = promote_empty_hash_for(key_type, val_type)
+                      promoted = promote_empty_hash_for(key_type, val_type)
+                    else
+ # Non-empty literal init followed by a `[]=` write whose
+ # value (or key) type doesn't fit the current variant's
+ # slot. CRuby treats the hash as having mixed value
+ # types; widen to `<key>_poly_hash` so the C-side store
+ # accepts the new value via sp_box_*. Without this, a
+ # `m = {"a" => "1"}; m["k"] = 42` emit fell through to
+ # `sp_StrStrHash_set(m, "k", 42LL)` which gcc rejects
+ # (mrb_int passed where const char * expected). Issue
+ # #589 minimal repro.
+ #
+ # Naming: infer_type uses long names ("string", "symbol",
+ # "int") so the fit-check compares against those, not
+ # against hash_key_part's short forms.
+                      cur_kt_l = ""
+                      cur_vt_l = ""
+                      if cur == "str_int_hash"
+                        cur_kt_l = "string"
+                        cur_vt_l = "int"
+                      elsif cur == "str_str_hash"
+                        cur_kt_l = "string"
+                        cur_vt_l = "string"
+                      elsif cur == "int_str_hash"
+                        cur_kt_l = "int"
+                        cur_vt_l = "string"
+                      elsif cur == "sym_int_hash"
+                        cur_kt_l = "symbol"
+                        cur_vt_l = "int"
+                      elsif cur == "sym_str_hash"
+                        cur_kt_l = "symbol"
+                        cur_vt_l = "string"
+                      end
+                      val_fits = (val_type == cur_vt_l) || (cur_vt_l == "int" && (val_type == "nil" || val_type == "bool")) || val_type == "" || val_type == cur_vt_l
+                      key_fits = (key_type == cur_kt_l) || key_type == ""
+                      if val_fits == 0 || key_fits == 0
+                        if cur_kt_l == "string"
+                          promoted = "str_poly_hash"
+                        elsif cur_kt_l == "symbol"
+                          promoted = "sym_poly_hash"
+                        elsif cur_kt_l == "int"
+ # int-keyed -> poly_poly is the only "poly value"
+ # variant spinel offers (no int_poly_hash). Widen
+ # the key side too.
+                          promoted = "poly_poly_hash"
+                        end
+                      end
+                    end
                     if promoted != "" && promoted != cur
                       types[ki] = promoted
  # Clear the flag only when reaching the terminal

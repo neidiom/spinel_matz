@@ -24013,6 +24013,42 @@ class Compiler
             end
             return
           end
+ # Non-empty hash literal against an LV widened to a `*_poly_hash`
+ # variant (the analyzer scan_locals widening for cross-type
+ # `[]=` writes after an initial typed literal). Build the
+ # literal as the poly variant directly, boxing each value.
+ # Without this, the literal init emitted `sp_StrStrHash_new` +
+ # `sp_StrStrHash_set` and assigned the result to the
+ # poly-typed LV slot, producing a -Wincompatible-pointer-types
+ # warning (and later setter calls on the LV used the wrong
+ # variant's ABI).
+          if vt == "str_poly_hash" || vt == "sym_poly_hash"
+            @needs_gc = 1
+            @needs_rb_value = 1
+            tmp_hp = new_temp
+            if vt == "str_poly_hash"
+              @needs_str_poly_hash = 1
+              emit("  sp_StrPolyHash *" + tmp_hp + " = sp_StrPolyHash_new();")
+            else
+              @needs_sym_poly_hash = 1
+              emit("  sp_SymPolyHash *" + tmp_hp + " = sp_SymPolyHash_new();")
+            end
+            ehk = 0
+            while ehk < elems2.length
+              if @nd_type[elems2[ehk]] == "AssocNode"
+                key_eh = @nd_key[elems2[ehk]]
+                val_eh = @nd_expression[elems2[ehk]]
+                if key_eh >= 0 && val_eh >= 0
+                  setter = vt == "str_poly_hash" ? "sp_StrPolyHash_set" : "sp_SymPolyHash_set"
+                  key_eh_c = vt == "str_poly_hash" ? compile_expr_as_string(key_eh) : compile_expr(key_eh)
+                  emit("  " + setter + "(" + tmp_hp + ", " + key_eh_c + ", " + box_expr_to_poly(val_eh) + ");")
+                end
+              end
+              ehk = ehk + 1
+            end
+            emit("  " + vref + " = " + tmp_hp + ";")
+            return
+          end
         end
       end
       if vt == "bigint"
