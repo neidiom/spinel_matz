@@ -5396,6 +5396,34 @@ class Compiler
     if expected_base == "poly" && at != "poly"
       return box_value_to_poly(at, val)
     end
+ # `*_ptr_array → poly_array` at the call boundary. The callee
+ # was inferred to take poly_array (because at least one caller
+ # passes a heterogeneous literal) but this caller passes a
+ # homogeneous typed PtrArray. The two layouts are incompatible
+ # (PtrArray is raw `void *` slots; PolyArray is sp_RbVal slots
+ # with tag + cls_id), so convert at the boundary: allocate a
+ # fresh PolyArray and box each PtrArray element via
+ # sp_box_obj(elem, cls_id). Issue #582.
+    if expected_base == "poly_array" && is_ptr_array_type(at) == 1
+      elem_t_pa = ptr_array_elem_type(at)
+      if is_obj_type(elem_t_pa) == 1
+        @needs_gc = 1
+        @needs_rb_value = 1
+        cname_pa = elem_t_pa[4, elem_t_pa.length - 4]
+        cidx_pa = find_class_idx(cname_pa)
+        if cidx_pa >= 0
+          cid_pa = cls_id_for_user_internal(cidx_pa)
+          src_pa = new_temp
+          dst_pa = new_temp
+          ii_pa = new_temp
+          emit("  sp_PtrArray *" + src_pa + " = " + val + ";")
+          emit("  sp_PolyArray *" + dst_pa + " = sp_PolyArray_new();")
+          emit("  SP_GC_ROOT(" + dst_pa + ");")
+          emit("  for (mrb_int " + ii_pa + " = 0; " + ii_pa + " < sp_PtrArray_length(" + src_pa + "); " + ii_pa + "++) sp_PolyArray_push(" + dst_pa + ", sp_box_obj(sp_PtrArray_get(" + src_pa + ", " + ii_pa + "), " + cid_pa.to_s + "LL));")
+          return dst_pa
+        end
+      end
+    end
     if expected_base == "string"
       if at == "poly"
         @needs_rb_value = 1
