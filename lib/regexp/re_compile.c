@@ -443,6 +443,42 @@ compile_atom(re_compiler *c)
           cap_name_len = (uint16_t)(c->p - cap_name);
           next_char(c);  /* skip > */
         }
+        else {
+          /* Inline-flag group `(?xim-xim:...)` or whole-group flag
+             `(?xim)`. Skip the flag chars (and optional `-flags`),
+             then either `:` (non-capturing body) or `)` (apply to
+             outer group). Spinel's compiler doesn't honour the
+             flag SEMANTICS yet -- /x in particular would need to
+             strip whitespace inside this sub-pattern only -- but
+             the parse now consumes the directive so compile_seq
+             advances. Without this, `(?x:foo)` left c->p stuck on
+             `?` and compile_seq's outer loop spun forever. */
+          int c1 = c->p[1];
+          int recognized_flag = (c1 == 'x' || c1 == 'i' || c1 == 'm' || c1 == 's' || c1 == 'u' || c1 == 'a');
+          if (recognized_flag) {
+            next_char(c);  /* skip ? */
+            while (peek(c) != ':' && peek(c) != ')' && peek(c) >= 0) next_char(c);
+            if (peek(c) == ':') {
+              next_char(c);  /* skip : */
+              capturing = FALSE;
+            }
+            else if (peek(c) == ')') {
+              /* `(?xim)` with no body — apply to the enclosing
+                 group; spinel doesn't track per-scope flags, so
+                 just consume the close paren and emit nothing.
+                 The atom loop will see the next token. */
+              next_char(c);
+              break;
+            }
+          }
+          else {
+            /* Unrecognized `(?<X>...` directive. Compile-error
+               instead of looping: better surface than the prior
+               infinite-loop wedge. */
+            compile_error(c, "unrecognized (? construct");
+            break;
+          }
+        }
       }
 
       uint16_t group = 0;

@@ -1204,6 +1204,30 @@ class Compiler
       end
       scope = trim_const_scope_once(scope)
     end
+ # If the enclosing class includes any modules, look up the const in
+ # the module's namespace. CRuby's lexical-scope chain walks Object →
+ # ancestors → included modules; spinel's @cls_meth_* table doesn't
+ # retain the method's original module of definition, so a `CONST`
+ # reference from a method that was attached via `include` falls
+ # through the lexical chain above. Walk the including class's
+ # `@cls_includes` and try each module's namespace -- matches the
+ # method-attachment pass in reconcile_class_includes.
+    if @current_class_idx >= 0 && @current_class_idx < @cls_includes.length
+      incs_str = @cls_includes[@current_class_idx]
+      if incs_str != ""
+        incs = incs_str.split(";")
+        ii = 0
+        while ii < incs.length
+          if incs[ii] != ""
+            cand_inc = incs[ii] + "_" + name
+            if const_namespace_exists(cand_inc) == 1
+              return cand_inc
+            end
+          end
+          ii = ii + 1
+        end
+      end
+    end
     name
   end
 
@@ -11954,6 +11978,34 @@ class Compiler
     "0"
   end
 
+ # Returns 1 if `nid` is a CallNode whose receiver AND first argument
+ # are both ArrayNode literals (`[...]` or `%i[...]` / `%w[...]`).
+ # Used by the int_array-vs-sym_array equality guard so that
+ # `[0,0,0] == %i[a a a]` short-circuits to FALSE without disturbing
+ # the widened-element-type case where the static type comes from a
+ # mutated local (issue #555).
+  def both_array_literals?(nid)
+    recv = @nd_receiver[nid]
+    if recv < 0
+      return 0
+    end
+    args_id = @nd_arguments[nid]
+    if args_id < 0
+      return 0
+    end
+    arg_ids = get_args(args_id)
+    if arg_ids.length == 0
+      return 0
+    end
+    if @nd_type[recv] != "ArrayNode"
+      return 0
+    end
+    if @nd_type[arg_ids[0]] != "ArrayNode"
+      return 0
+    end
+    1
+  end
+
  # Compile the first argument expecting a symbol-typed key for
  # sym_*_hash lookups. A SymbolNode literal already compiles to a
  # raw `SPS_<name>` (sp_sym); a poly-typed argument (e.g. an
@@ -18238,6 +18290,9 @@ class Compiler
           return tmp
         end
       end
+      if mname == "dup" || mname == "clone"
+        return "sp_IntStrHash_dup(" + rc + ")"
+      end
     end
     if recv_type == "str_str_hash"
       if mname == "[]"
@@ -18300,6 +18355,9 @@ class Compiler
           end
           return "sp_StrStrHash_get(" + rc + ", " + key + ")"
         end
+      end
+      if mname == "dup" || mname == "clone"
+        return "sp_StrStrHash_dup(" + rc + ")"
       end
     end
     ""
@@ -21407,7 +21465,19 @@ class Compiler
  # static type as int_array but the runtime values are sym
  # ids; both sides share the IntArray layout so the helper
  # is sound). Issue #555.
+ #
+ # Literal-vs-literal mismatch in element type
+ # (`[0,0,0] == %i[a a a]`) answers FALSE -- CRuby distinguishes
+ # element classes, and the raw IntArray_eq would coincidentally
+ # return true when sym ids collide with the int values
+ # (SPS_a == 0 makes `[:a,:a,:a]` encode identically to
+ # `[0,0,0]`). Restricted to direct ArrayNode literals on both
+ # sides so the `<<`-widened "int_array carrying syms at runtime"
+ # shape (issue #555's test #06) keeps using IntArray_eq.
     if (lt == "int_array" || lt == "sym_array") && (at == "int_array" || at == "sym_array")
+      if lt != at && both_array_literals?(nid) == 1
+        return op == "==" ? "FALSE" : "TRUE"
+      end
       if op == "=="
         return "sp_IntArray_eq((sp_IntArray *)(" + lc + "), (sp_IntArray *)(" + rc + "))"
       else

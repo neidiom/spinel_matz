@@ -1146,6 +1146,26 @@ class Compiler
       end
       scope = trim_const_scope_once(scope)
     end
+ # Include-chain fallback: a bare `CONST` reference from a method
+ # body that was attached to the current class via `include M` should
+ # resolve M::CONST. spinel's method table doesn't retain the
+ # original-module lexical scope, so the chain walk above misses it.
+    if @current_class_idx >= 0 && @current_class_idx < @cls_includes.length
+      incs_str = @cls_includes[@current_class_idx]
+      if incs_str != ""
+        incs = incs_str.split(";")
+        ii = 0
+        while ii < incs.length
+          if incs[ii] != ""
+            cand_inc = incs[ii] + "_" + name
+            if const_namespace_exists(cand_inc) == 1
+              return cand_inc
+            end
+          end
+          ii = ii + 1
+        end
+      end
+    end
     name
   end
 
