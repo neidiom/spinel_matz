@@ -13526,7 +13526,7 @@ class Compiler
     if mname == "sleep"
       args_id = @nd_arguments[nid]
       if args_id >= 0
-        emit("  sleep((unsigned)" + compile_arg0(nid) + ");")
+        emit("  sp_sleep((mrb_float)" + compile_arg0(nid) + ");")
       end
       return "0"
     end

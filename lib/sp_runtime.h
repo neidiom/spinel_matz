@@ -1715,6 +1715,27 @@ static mrb_int sp_catch_val[SP_CATCH_STACK_MAX];
 static volatile int sp_catch_top = 0;
 static void sp_throw(const char *tag, mrb_int val) { int i = sp_catch_top - 1; while (i >= 0) { if (strcmp(sp_catch_tag[i], tag) == 0) { sp_catch_val[i] = val; sp_catch_top = i + 1; longjmp(sp_catch_stack[i], 1); } i--; } fprintf(stderr, "uncaught throw: %s\n", tag); exit(1); }
 
+/* Kernel#sleep with sub-second precision. Argument is seconds as a
+   double so `sleep(0.5)` actually waits 500ms; the legacy `sleep((unsigned)0.5)`
+   cast truncated to 0 and returned immediately. POSIX uses
+   nanosleep(); Windows uses Sleep() (milliseconds). Negative or NaN
+   inputs no-op. */
+static void sp_sleep(mrb_float s) {
+  if (!(s > 0.0)) return;
+#ifdef _WIN32
+  DWORD ms = (DWORD)(s * 1000.0);
+  if (ms == 0) ms = 1;
+  Sleep(ms);
+#else
+  struct timespec req;
+  req.tv_sec = (time_t)s;
+  req.tv_nsec = (long)((s - (double)req.tv_sec) * 1e9);
+  if (req.tv_nsec < 0) req.tv_nsec = 0;
+  if (req.tv_nsec >= 1000000000L) req.tv_nsec = 999999999L;
+  while (nanosleep(&req, &req) == -1 && errno == EINTR) {}
+#endif
+}
+
 #ifdef _WIN32
 static DWORD sp_file_attributes(const char *path) {
   if (!path) return INVALID_FILE_ATTRIBUTES;
