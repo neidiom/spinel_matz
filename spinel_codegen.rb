@@ -4106,6 +4106,12 @@ class Compiler
 
   def c_default_val(t)
     if is_nullable_type(t) == 1
+ # Scalar-nullable types use a sentinel encoding, not NULL.
+ # `int?` defaults to SP_INT_NIL; future int? siblings slot in here
+ # before the NULL fallback.
+      if is_scalar_nullable_type(t) == 1
+        return "SP_INT_NIL"
+      end
  # Value-type classes (`obj_<C>?` where C is a value type) lower
  # to a struct, not a pointer — `NULL` is an invalid initializer.
  # Fall through to the value-type branch below by stripping `?`.
@@ -13494,13 +13500,17 @@ class Compiler
     end
 
     recv_type = infer_type(recv)
- # Nullable receiver: dispatch identically to the base type. The
- # null check is the caller's responsibility, matching Ruby's
- # NoMethodError semantics on a nil receiver. Without this, a
- # local typed `string?` (e.g. an opt param `f = nil` later passed
- # a string) misses every per-type dispatcher and falls through
- # to the "0" fallback. .
-    if is_nullable_type(recv_type) == 1
+ # Nullable pointer receiver: dispatch identically to the base type.
+ # The null check is the caller's responsibility, matching Ruby's
+ # NoMethodError semantics on a nil receiver. Without this, a local
+ # typed `string?` (e.g. an opt param `f = nil` later passed a
+ # string) misses every per-type dispatcher and falls through to
+ # the "0" fallback.
+ #
+ # Scalar-nullable receivers (int?) get their own dispatch arms
+ # below (the sentinel-aware ones for .nil? / .inspect / .to_s),
+ # so don't strip `?` here — the int? arm has to see the full type.
+    if is_nullable_type(recv_type) == 1 && is_scalar_nullable_type(recv_type) == 0
       recv_type = base_type(recv_type)
     end
  # Recv expr emits sp_RbVal even though the cached static type
@@ -13712,6 +13722,24 @@ class Compiler
 
  # Integer methods
     if recv_type == "int"
+      r = compile_int_method_expr(nid, mname, rc)
+      if r != ""
+        return r
+      end
+    end
+
+ # int? (scalar-nullable int) methods. The base type is mrb_int, so
+ # arithmetic and most queries reuse the int dispatch above by
+ # falling through; the methods that diverge on the sentinel
+ # (`.nil?` is handled at the top-level pred dispatch, and
+ # `.inspect` / `.to_s` need to print "nil" rather than INT64_MIN's
+ # decimal) get their own arms here. Sentinel leak on arithmetic
+ # (`r + 1` when r is SP_INT_NIL) is the documented spec until the
+ # narrow-on-nil-check path lands.
+    if is_scalar_nullable_type(recv_type) == 1
+      if mname == "inspect" || mname == "to_s"
+        return "sp_int_opt_inspect(" + rc + ")"
+      end
       r = compile_int_method_expr(nid, mname, rc)
       if r != ""
         return r
@@ -17205,18 +17233,16 @@ class Compiler
       if mname == "index" || mname == "find_index"
         if @nd_arguments[nid] >= 0
  # CRuby returns Integer | nil from Array#index. Route through
- # the `_poly` wrapper that boxes nil for not-found; this keeps
- # `arr.index(x).nil?` / `arr.index(x) == nil` behaving the
- # CRuby way. The raw `_index` helper still returns the -1
- # sentinel for internal callers that need it.
-          @needs_rb_value = 1
-          return "sp_IntArray_index_poly(" + rc + ", " + compile_arg0(nid) + ")"
+ # the `_opt` wrapper that returns the int? sentinel for
+ # not-found; the call result is statically int?, so `.nil?`
+ # tests fold to a sentinel compare and downstream arithmetic
+ # under a nil-guard skips the box/unbox round-trip.
+          return "sp_IntArray_index_opt(" + rc + ", " + compile_arg0(nid) + ")"
         end
       end
       if mname == "rindex"
         if @nd_arguments[nid] >= 0
-          @needs_rb_value = 1
-          return "sp_IntArray_rindex_poly(" + rc + ", " + compile_arg0(nid) + ")"
+          return "sp_IntArray_rindex_opt(" + rc + ", " + compile_arg0(nid) + ")"
         end
       end
       if mname == "delete_at"
@@ -19637,6 +19663,13 @@ class Compiler
       end
       if recv_type == "poly"
         return "sp_poly_nil_p(" + rc + ")"
+      end
+ # Scalar-nullable types (int?, ...) encode nil with a reserved
+ # sentinel value, not NULL. Test via sp_int_is_nil before falling
+ # through to the NULL-pointer branch (which would compare mrb_int
+ # to NULL and silently mean "== 0").
+      if is_scalar_nullable_type(recv_type) == 1
+        return "sp_int_is_nil(" + rc + ")"
       end
       if is_nullable_type(recv_type) == 1
         return "(" + rc + " == NULL)"

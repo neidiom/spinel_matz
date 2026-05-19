@@ -4551,14 +4551,15 @@ class Compiler
           @needs_rb_value = 1
           return "poly"
         end
- # Limited to int_array / str_array for now -- codegen has
- # `_poly` wrappers only for these two array kinds.
- # float_array / sym_array / poly_array / ptr_array fall
- # through to the existing unresolved-call path (warn + emit 0)
- # until their `_poly` wrappers land. Issue raised during the
- # #585 follow-up; the subset-correctness fix here only covers
- # the array kinds with existing emit routes.
-        if rt_idx == "int_array" || rt_idx == "str_array"
+ # int_array uses the int? sentinel path (returns mrb_int with
+ # SP_INT_NIL marking not-found). str_array still goes through
+ # the poly-widening wrapper because the str-side _opt helper
+ # would need a string sentinel and we haven't settled the
+ # str? encoding yet.
+        if rt_idx == "int_array"
+          return "int?"
+        end
+        if rt_idx == "str_array"
           @needs_rb_value = 1
           return "poly"
         end

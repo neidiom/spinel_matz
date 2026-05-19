@@ -1547,6 +1547,18 @@ static sp_RbVal sp_IntArray_index_poly(sp_IntArray *a, mrb_int v)         { mrb_
 static sp_RbVal sp_IntArray_rindex_poly(sp_IntArray *a, mrb_int v)        { mrb_int n = sp_IntArray_rindex(a, v);  return n < 0 ? sp_box_nil() : sp_box_int(n); }
 static sp_RbVal sp_StrArray_index_poly(sp_StrArray *a, const char *v)     { mrb_int n = sp_StrArray_index(a, v);   return n < 0 ? sp_box_nil() : sp_box_int(n); }
 static sp_RbVal sp_StrArray_rindex_poly(sp_StrArray *a, const char *v)    { mrb_int n = sp_StrArray_rindex(a, v);  return n < 0 ? sp_box_nil() : sp_box_int(n); }
+/* int? siblings of the *_index_poly wrappers above. Same not-found
+   semantics, but return the int? sentinel (SP_INT_NIL) instead of
+   boxing into sp_RbVal. Used when the call site's static type
+   tracking carries the result as int? rather than poly — eliminates
+   the box/unbox round-trip for the common `i = arr.index(x);
+   i.nil? ? ... : <use i as int>` idiom. */
+static mrb_int sp_IntArray_index_opt(sp_IntArray *a, mrb_int v)           { mrb_int n = sp_IntArray_index(a, v);   return n < 0 ? SP_INT_NIL : n; }
+static mrb_int sp_IntArray_rindex_opt(sp_IntArray *a, mrb_int v)          { mrb_int n = sp_IntArray_rindex(a, v);  return n < 0 ? SP_INT_NIL : n; }
+/* Inspect/to_s for an int? value. CRuby renders the nil case as
+   "nil" and the integer case via Integer#to_s. sp_int_to_s already
+   handles the latter; the wrapper only adds the nil short-circuit. */
+static const char *sp_int_opt_inspect(mrb_int v) { return sp_int_is_nil(v) ? "nil" : sp_int_to_s(v); }
 /* sp_Range is a 16-byte value type that doesn't fit in sp_RbVal's union
    (max 8 bytes). When a Range crosses into a poly slot (heterogeneous
    hash / array / param / ivar), copy it onto the GC heap and box the
