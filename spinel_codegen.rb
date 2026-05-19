@@ -1782,6 +1782,25 @@ class Compiler
     i = @scope_names.length - 1
     while i >= 0
       if @scope_names[i] == name
+ # When the declared slot is a *_poly_hash variant, a subsequent
+ # narrower-shape assignment (`<str_poly_hash slot> = StrStrHash.dup`
+ # — the analyzer widened the slot's C type at declaration time to
+ # accommodate later poly-value writes, but the initial RHS is the
+ # narrower StrStrHash) must not collapse the tracked type back to
+ # the narrower variant. The C slot's storage type is fixed at
+ # declaration; downstream emit sites (bracket_assign, etc.) read
+ # the tracked type to pick the right runtime helper, and dispatching
+ # on the narrower variant against a wider slot tries to call
+ # sp_StrStrHash_set against an sp_StrPolyHash * — hard cc error.
+ # Issue #613.
+        cur = @scope_types[i]
+        if (cur == "str_poly_hash" && vtype == "str_str_hash") ||
+           (cur == "str_poly_hash" && vtype == "str_int_hash") ||
+           (cur == "sym_poly_hash" && vtype == "sym_str_hash") ||
+           (cur == "sym_poly_hash" && vtype == "sym_int_hash") ||
+           (cur == "poly_poly_hash" && (vtype == "str_str_hash" || vtype == "str_int_hash" || vtype == "sym_str_hash" || vtype == "sym_int_hash" || vtype == "int_str_hash" || vtype == "str_poly_hash" || vtype == "sym_poly_hash"))
+          return
+        end
         @scope_types[i] = vtype
         return
       end
@@ -29229,6 +29248,23 @@ class Compiler
   def compile_bracket_assign(nid)
     recv = @nd_receiver[nid]
     rt = infer_type(recv)
+ # When the recv is a local whose declared C slot type is a
+ # different (wider) hash variant than the analyzer's per-call-
+ # site infer_type, prefer the declared type. The analyzer's
+ # refine_method_body_locals pass-2 widens locals to str_poly_hash
+ # when cross-type writes flow in (the post-#610 follow-on shape
+ # from #613); the matching scope decl already lays the local
+ # down as sp_StrPolyHash *, but infer_type may still report
+ # the un-widened str_str_hash from the initial `.dup`-from-
+ # str_str_hash writer. Dispatching on the un-widened type emits
+ # sp_StrStrHash_set against an sp_StrPolyHash * slot — hard cc
+ # error.
+    if @nd_type[recv] == "LocalVariableReadNode"
+      decl_rt = find_var_declared_type(@nd_name[recv])
+      if decl_rt != "" && decl_rt != rt && is_hash_type(decl_rt) == 1
+        rt = decl_rt
+      end
+    end
  # Nullable hash receivers (`str_str_hash?` etc.) should dispatch
  # identically to the base hash; NULL-check semantics live at the
  # caller, mirroring compile_call_expr's strip-? handling. Without
