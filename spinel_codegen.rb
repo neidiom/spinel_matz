@@ -29198,6 +29198,14 @@ class Compiler
   def compile_bracket_assign(nid)
     recv = @nd_receiver[nid]
     rt = infer_type(recv)
+ # Nullable hash receivers (`str_str_hash?` etc.) should dispatch
+ # identically to the base hash; NULL-check semantics live at the
+ # caller, mirroring compile_call_expr's strip-? handling. Without
+ # this, `<str_str_hash?>[k] = v` fell through every arm and
+ # emitted nothing — the silent-elision shape reported in #610.
+    if is_nullable_pointer_type(rt) == 1 && is_nullable_type(rt) == 1
+      rt = base_type(rt)
+    end
     rc = compile_expr_gc_rooted(recv)
     args_id = @nd_arguments[nid]
     arg_ids = []
@@ -29266,6 +29274,24 @@ class Compiler
     end
     if rt == "int_str_hash"
       emit("  sp_IntStrHash_set(" + rc + ", " + idx + ", " + val + ");")
+      return
+    end
+ # str_int_hash / str_str_hash were both missing here previously,
+ # so `<str_str_hash>[k] = v` fell through compile_bracket_assign
+ # with no emit at all — the silent-elision shape reported in #610
+ # where a typed-hash write inside a `.each` block disappeared.
+ # The value side coerces through compile_expr_as_int /
+ # compile_expr_as_string so a poly-typed RHS (the canonical
+ # `v.is_a?(Hash) ? ... : v` ternary shape) unboxes to the cell's
+ # stored type rather than dropping silently.
+    if rt == "str_int_hash"
+      val_int = compile_expr_as_int(arg_ids[1])
+      emit("  sp_StrIntHash_set(" + rc + ", " + idx + ", " + val_int + ");")
+      return
+    end
+    if rt == "str_str_hash"
+      val_str = compile_expr_as_string(arg_ids[1])
+      emit("  sp_StrStrHash_set(" + rc + ", " + idx + ", " + val_str + ");")
       return
     end
     if rt == "sym_int_hash"
