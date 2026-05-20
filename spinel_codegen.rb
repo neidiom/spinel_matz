@@ -15817,6 +15817,16 @@ class Compiler
   end
 
   def compile_string_method_expr(nid, mname, rc)
+ # String#chomp! alias for chomp. Returns the chomped string;
+ # the Ruby `nil if no change` mutator semantic isn't preserved
+ # (a documented quirk -- spinel strings are immutable so there's
+ # nothing to mutate in place). Recurse so the local `mname` isn't
+ # reassigned (writing back to a parameter triggers a body-usage
+ # widening pass that lands warn_unresolved_call's mname as poly
+ # in the bootstrap build). Issue #619 puzzle 10.
+    if mname == "chomp!"
+      return compile_string_method_expr(nid, "chomp", rc)
+    end
  # is_a? / kind_of? / instance_of? for primitive String. Decide at
  # compile time based on Ruby's class hierarchy (String < Comparable
  # < Object). Anything outside that chain is FALSE.
@@ -16908,6 +16918,19 @@ class Compiler
     if is_array_type(recv_type) == 0
       return ""
     end
+ # Built-in Array method aliases. `at` -> `[]` and `append` -> `push`
+ # apply only when the receiver is a built-in array; a user class
+ # with `def at` / `def append` keeps its own dispatch via the
+ # is_array_type guard above. Recurse so the local `mname` isn't
+ # reassigned (a write to a parameter triggers a body-usage type
+ # widening pass that makes warn_unresolved_call's mname param
+ # land as poly in the bootstrap build). Issue #619 puzzles 8 / 9.
+    if mname == "at"
+      return compile_array_method_expr(nid, "[]", rc, recv_type)
+    end
+    if mname == "append"
+      return compile_array_method_expr(nid, "push", rc, recv_type)
+    end
  # Array#dig with a single index reduces to []. Multi-arg dig that
  # walks into nested arrays/hashes isn't supported here yet — fall
  # through to the unsupported-call warning.
@@ -17886,7 +17909,12 @@ class Compiler
         return "sp_StrArray_join(" + rc + ", " + jarg + ")"
       end
       if mname == "push"
-        return "(sp_StrArray_push(" + rc + ", " + compile_arg0(nid) + "), 0)"
+ # Return the array (matching CRuby's `arr.push(x) -> arr`) so an
+ # expression-form push (`arr.push("b") == other`, `arr.append(...)`,
+ # ...) compares like an array, not like int 0. Issue #619 puzzle 9.
+ # The `<<` operator path further up already does this for its
+ # str_array branch.
+        return "(sp_StrArray_push(" + rc + ", " + compile_arg0(nid) + "), " + rc + ")"
       end
       if mname == "pop"
         return "sp_StrArray_pop(" + rc + ")"

@@ -4163,7 +4163,7 @@ class Compiler
     if mname == "strip"
       return "string"
     end
-    if mname == "chomp" || mname == "chop"
+    if mname == "chomp" || mname == "chop" || mname == "chomp!"
       return "string"
     end
  # `force_encoding` / `encode` / `b` lower to a receiver
@@ -4803,7 +4803,7 @@ class Compiler
     if mname == "invert"
       return "str_str_hash"
     end
-    if mname == "push"
+    if mname == "push" || mname == "append"
       if recv >= 0
         return infer_type(recv)
       end
@@ -5283,7 +5283,7 @@ class Compiler
       end
       return "int"
     end
-    if mname == "[]"
+    if mname == "[]" || (mname == "at" && recv >= 0 && is_array_type(infer_type(recv)) == 1)
       if recv >= 0
  # ENV["X"] returns `const char *` (sp_str_dup_external of
  # getenv). The plain receiver-type dispatch below would
