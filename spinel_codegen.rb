@@ -16254,7 +16254,11 @@ class Compiler
           end
         end
       end
-      return fn + "(" + lprefix + ", " + compile_arg0_as_int(nid) + ", 1)"
+ # Bare s[i] returns nil on out-of-bounds (CRuby). Use the
+ # _or_nil variant so the result compares correctly against
+ # NULL in `.nil?` and assignment-to-nullable contexts.
+ # Issue #619 puzzle 3.
+      return "sp_str_char_at_or_nil(" + rc + ", " + compile_arg0_as_int(nid) + ")"
     end
     if mname == "reverse"
       return "sp_str_reverse(" + rc + ")"

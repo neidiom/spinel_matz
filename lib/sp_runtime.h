@@ -1094,6 +1094,11 @@ static char sp_char_cache[256][3];
 static int sp_char_cache_init = 0;
 /* start/len are codepoint indices/counts. */
 static const char*sp_str_sub_range(const char*s,mrb_int start,mrb_int len){mrb_int cl=sp_str_length(s);if(start<0)start+=cl;if(start<0)start=0;if(start>=cl||len<=0){return &("\xff" "")[1];}if(start+len>cl)len=cl-start;size_t boff=sp_utf8_byte_offset(s,start);size_t bend=sp_utf8_byte_offset(s+boff,len)+boff;size_t blen=bend-boff;if(len==1&&blen==1){unsigned char c=(unsigned char)s[boff];if(!sp_char_cache_init){for(int i=0;i<256;i++){sp_char_cache[i][0]=(char)0xff;sp_char_cache[i][1]=(char)i;sp_char_cache[i][2]=0;}sp_char_cache_init=1;}return &sp_char_cache[c][1];}char*r=sp_str_alloc_raw(blen+1);memcpy(r,s+boff,blen);r[blen]=0;return r;}
+/* Single-character form of `s[i]`. Returns NULL on out-of-bounds to
+   match CRuby's `"hello"[20] -> nil`. The two-arg `s[i, len]` /
+   range forms keep returning "" on OOB via sp_str_sub_range; only
+   the bare single-int index aliases here. Issue #619 puzzle 3. */
+static const char*sp_str_char_at_or_nil(const char*s,mrb_int i){mrb_int cl=sp_str_length(s);if(i<0)i+=cl;if(i<0||i>=cl)return NULL;return sp_str_sub_range(s,i,1);}
 /* Char-indexed variant; the second arg used to be a hoisted byte length, now a
    hoisted codepoint count.  We don't need it for correctness, but keeping the
    ABI lets callers pass it without a wrapper. */
