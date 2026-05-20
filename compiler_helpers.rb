@@ -342,6 +342,18 @@ class Compiler
       if parts[k] == target
         return 1
       end
+ # Allow when ci is a descendant of an observed class. The ivar
+ # may have been written via a typed setter (`def set_x(f); @x = f; end`)
+ # whose param is the declared base type, but the actual runtime
+ # object is a subclass instance whose own cls_id won't appear in
+ # the observed set. Without this, the dispatch only emits the
+ # base-class arm and the subclass override is silently skipped --
+ # the #616 filter-elision shape (App.set_before(SubFilter.new) ->
+ # @before_filter.before(...) where the override never fires).
+      ancestor_ci = parts[k].to_i
+      if ancestor_ci >= 0 && cls_is_descendant(ci, ancestor_ci) == 1
+        return 1
+      end
       k = k + 1
     end
     0

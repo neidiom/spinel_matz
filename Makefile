@@ -296,10 +296,10 @@ codegen: spinel_analyze$(EXE) spinel_codegen$(EXE)
 # AST while later steps used the fresh one. The bid mismatch then
 # corrupted scope tables in the bootstrap fixpoint output. See #620.
 
-build/analyze.ast: $(ANALYZE_STAMP) spinel_parse$(EXE)
+build/analyze.ast: $(ANALYZE_STAMP) $(NODE_TABLE_LOADER_STAMP) $(COMPILER_HELPERS_STAMP) spinel_parse$(EXE)
 	./spinel_parse$(EXE) spinel_analyze.rb build/analyze.ast
 
-build/codegen.ast: $(CODEGEN_STAMP) spinel_parse$(EXE)
+build/codegen.ast: $(CODEGEN_STAMP) $(NODE_TABLE_LOADER_STAMP) $(COMPILER_HELPERS_STAMP) spinel_parse$(EXE)
 	./spinel_parse$(EXE) spinel_codegen.rb build/codegen.ast
 
 build/analyze.ir: build/analyze.ast $(ANALYZE_STAMP) $(NODE_TABLE_LOADER_STAMP) $(COMPILER_HELPERS_STAMP)
