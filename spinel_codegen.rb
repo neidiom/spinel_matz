@@ -20958,6 +20958,7 @@ class Compiler
  # poly_dispatch_return_type already consults this set; the
  # emit loop just needed the matching skip.
     dispatch_narrow_set = poly_dispatch_narrow_class_set(nid)
+    poly_dispatch_arms_emitted = 0
     i = 0
     while i < @cls_names.length
       if dispatch_narrow_set != "" && poly_dispatch_class_in_set(dispatch_narrow_set, i) == 0
@@ -21080,6 +21081,7 @@ class Compiler
  # skip
         else
           emit("    if (" + recv_tmp + ".cls_id == " + cls_id_for_user_internal(i).to_s + ") " + tmp + " = " + rhs + ";")
+          poly_dispatch_arms_emitted = poly_dispatch_arms_emitted + 1
         end
       elsif cls_has_attr_reader(i, mname) == 1
  # An auto-registered attr_reader doesn't appear in
@@ -21095,6 +21097,7 @@ class Compiler
  # skip non-int attr_reader arms on a narrowed `[]`
         else
           emit("    if (" + recv_tmp + ".cls_id == " + cls_id_for_user_internal(i).to_s + ") " + tmp + " = " + rhs + ";")
+          poly_dispatch_arms_emitted = poly_dispatch_arms_emitted + 1
         end
       elsif mname.length > 1 && mname[mname.length - 1] == "=" && cls_has_attr_writer(i, mname[0, mname.length - 1]) == 1
  # An auto-registered attr_writer setter (`obj.x = v`) on a
@@ -21129,12 +21132,25 @@ class Compiler
           rhs_for_tmp = box_val_to_poly(store_val, slot_t)
         end
         emit("    if (" + recv_tmp + ".cls_id == " + cls_id_for_user_internal(i).to_s + ") { " + ivar_lhs + " = " + store_val + "; " + tmp + " = " + rhs_for_tmp + "; }")
+        poly_dispatch_arms_emitted = poly_dispatch_arms_emitted + 1
       end
       i = i + 1
     end
  # Built-in type dispatch (cls_id < 0).
     emit_poly_builtin_dispatch(recv_tmp, mname, arg_compiled, arg_types, tmp, is_poly_ret, narrowed_int_idx)
     emit("  }")
+ # Warn when the user-class dispatch loop emitted zero arms. The
+ # result temp keeps its default (0) and downstream code consuming
+ # the result as the receiver's RBS-declared type emits ill-typed
+ # C (e.g. mrb_int 0 passed to a pointer parameter). Common cause:
+ # an RBS-typed singleton accessor (`def self.adapter: () -> Iface`)
+ # for an abstract class with no concrete implementors in scope is
+ # never assigned before the call. Issue #623. Matches the existing
+ # `cannot resolve call to 'X' on Y (emitting 0)` pattern so editors
+ # / CI grep for compile noise still surface this case.
+    if poly_dispatch_arms_emitted == 0
+      warn_unresolved_call(mname, "poly (no concrete user-class arm)")
+    end
     tmp
   end
 
