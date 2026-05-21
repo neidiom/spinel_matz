@@ -22767,6 +22767,13 @@ class Compiler
       if ivt_i == "poly" && rhs_type != "poly"
         val_i = box_value_to_poly(rhs_type, tmp)
       end
+      if ivt_i == "bigint" && rhs_type == "int"
+        @needs_bigint = 1
+        val_i = "sp_bigint_new_int(" + tmp + ")"
+      elsif ivt_i == "int" && rhs_type == "bigint"
+        @needs_bigint = 1
+        val_i = "sp_bigint_to_int((sp_Bigint *)" + tmp + ")"
+      end
       mod_ivar = 0
       mi3 = 0
       while mi3 < @module_names.length
