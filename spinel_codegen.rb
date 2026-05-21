@@ -28098,10 +28098,18 @@ class Compiler
           emit("  {")
           emit("  mrb_int lv_" + bp1 + " = 0;")
         end
-        emit("  for (lv_" + bp1 + " = " + rc + "; lv_" + bp1 + " <= " + limit_val + "; lv_" + bp1 + " += " + step_val + ") {")
+        bp_t_st = find_var_type(bp1)
+        if bp_t_st == "bigint"
+          @needs_bigint = 1
+          stmp_st = new_temp
+          emit("  for (mrb_int " + stmp_st + " = " + rc + "; " + stmp_st + " <= " + limit_val + "; " + stmp_st + " += " + step_val + ") {")
+          emit("    lv_" + bp1 + " = sp_bigint_new_int(" + stmp_st + ");")
+        else
+          emit("  for (lv_" + bp1 + " = " + rc + "; lv_" + bp1 + " <= " + limit_val + "; lv_" + bp1 + " += " + step_val + ") {")
+        end
         @indent = @indent + 1
         push_scope
-        declare_var(bp1, "int")
+        declare_var(bp1, bp_t_st == "bigint" ? "bigint" : "int")
         redo_label = push_redo_label
         emit_redo_label(redo_label)
         compile_stmts_body(@nd_body[@nd_block[nid]])
