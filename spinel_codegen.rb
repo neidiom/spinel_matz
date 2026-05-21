@@ -34183,14 +34183,7 @@ class Compiler
       aids = get_args(args_id)
       k = 0
       while k < aids.length
- # The block's C ABI is `(mrb_int, ..., void *)`; promote-mode
- # widened args are sp_Bigint * locally and need unboxing.
-        yarg_ev = compile_expr(aids[k])
-        if infer_type(aids[k]) == "bigint"
-          @needs_bigint = 1
-          yarg_ev = "sp_bigint_to_int((sp_Bigint *)" + yarg_ev + ")"
-        end
-        emitted.push(yarg_ev)
+        emitted.push(compile_expr(aids[k]))
         k = k + 1
       end
     end
@@ -34508,6 +34501,25 @@ class Compiler
       rname = remap_local(lname, map_from, map_to)
       op = @nd_binop[nid]
       val = compile_expr_remap(@nd_expression[nid], map_from, map_to)
+      vt_lvo = find_var_type(lname)
+ # promote-mode-widened slot: route through sp_bigint_*.
+      if vt_lvo == "bigint"
+        @needs_bigint = 1
+        rhs_t_lvo = infer_type(@nd_expression[nid])
+        rhs_big_lvo = rhs_t_lvo == "bigint" ? "(sp_Bigint *)(" + val + ")" : "sp_bigint_new_int(" + val + ")"
+        if op == "+"
+          emit("  lv_" + rname + " = sp_bigint_add((sp_Bigint *)lv_" + rname + ", " + rhs_big_lvo + ");")
+          return
+        end
+        if op == "-"
+          emit("  lv_" + rname + " = sp_bigint_sub((sp_Bigint *)lv_" + rname + ", " + rhs_big_lvo + ");")
+          return
+        end
+        if op == "*"
+          emit("  lv_" + rname + " = sp_bigint_mul((sp_Bigint *)lv_" + rname + ", " + rhs_big_lvo + ");")
+          return
+        end
+      end
       if op == "+"
         emit("  lv_" + rname + " += " + val + ";")
       end
