@@ -23063,12 +23063,28 @@ class Compiler
                   next
                 end
               end
-              result = result + compile_expr(def_id)
+ # Route through compile_expr_for_expected_type so a `= nil`
+ # default landing in a poly slot (after the #634 widening)
+ # boxes to sp_box_nil() rather than emitting the bare `0`
+ # that the caller would otherwise pass as the param value.
+              if k < ptypes.length
+                result = result + compile_expr_for_expected_type(def_id, ptypes[k])
+              else
+                result = result + compile_expr(def_id)
+              end
+            else
+              if k < ptypes.length && ptypes[k] == "poly"
+                result = result + "sp_box_nil()"
+              else
+                result = result + "0"
+              end
+            end
+          else
+            if k < ptypes.length && ptypes[k] == "poly"
+              result = result + "sp_box_nil()"
             else
               result = result + "0"
             end
-          else
-            result = result + "0"
           end
         end
       end

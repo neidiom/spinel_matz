@@ -14065,6 +14065,131 @@ class Compiler
     end
   end
 
+ # Post-pass for #634 shape A. An optional param with an explicit
+ # `= nil` default whose call sites then widen its type to a
+ # non-nullable scalar (int / symbol / float / bool) loses the
+ # nil-vs-zero distinction at the no-arg call site: the missing arg
+ # defaults to the zero value of the scalar, not to nil, and any
+ # `param.nil?` branch in the body becomes dead code. Escalate
+ # those slots to poly so the default fill emits sp_box_nil() and
+ # nil remains observable. Skipped when the param never widened
+ # past `nil` (no typed callers — the slot stays nil-typed, which
+ # the codegen already lowers reasonably as int).
+  def widen_nil_default_params_to_poly
+    mi = 0
+    while mi < @meth_names.length
+      pnames = @meth_param_names[mi].split(",")
+      ptypes = @meth_param_types[mi].split(",")
+      defaults = @meth_has_defaults[mi].split(",")
+      changed = 0
+      pk = 0
+      while pk < pnames.length
+        if pk < ptypes.length && pk < defaults.length
+          def_id = defaults[pk].to_i
+          if def_id >= 0 && @nd_type[def_id] == "NilNode"
+            pt = ptypes[pk]
+            if pt == "int" || pt == "symbol" || pt == "float" || pt == "bool"
+              ptypes[pk] = "poly"
+              @needs_rb_value = 1
+              changed = 1
+            end
+          end
+        end
+        pk = pk + 1
+      end
+      if changed == 1
+        @meth_param_types[mi] = ptypes.join(",")
+      end
+      mi = mi + 1
+    end
+    ci = 0
+    while ci < @cls_names.length
+      all_params = @cls_meth_params[ci].split("|")
+      all_ptypes = @cls_meth_ptypes[ci].split("|")
+      all_defaults = @cls_meth_defaults[ci].split("|")
+      cls_changed = 0
+      mj = 0
+      while mj < all_params.length
+        if mj < all_ptypes.length
+          pnames_j = all_params[mj].split(",")
+          ptypes_j = all_ptypes[mj].split(",")
+          defs_str_j = ""
+          if mj < all_defaults.length
+            defs_str_j = all_defaults[mj]
+          end
+          defs_arr_j = defs_str_j.split(",")
+          inner_changed = 0
+          pk = 0
+          while pk < pnames_j.length
+            if pk < ptypes_j.length && pk < defs_arr_j.length
+              def_id = defs_arr_j[pk].to_i
+              if def_id >= 0 && @nd_type[def_id] == "NilNode"
+                pt = ptypes_j[pk]
+                if pt == "int" || pt == "symbol" || pt == "float" || pt == "bool"
+                  ptypes_j[pk] = "poly"
+                  @needs_rb_value = 1
+                  inner_changed = 1
+                end
+              end
+            end
+            pk = pk + 1
+          end
+          if inner_changed == 1
+            all_ptypes[mj] = ptypes_j.join(",")
+            cls_changed = 1
+          end
+        end
+        mj = mj + 1
+      end
+      if cls_changed == 1
+        @cls_meth_ptypes[ci] = all_ptypes.join("|")
+        @cls_meth_ptypes_version = @cls_meth_ptypes_version + 1
+      end
+      cmeth_params_all = @cls_cmeth_params[ci].split("|")
+      cmeth_ptypes_all = @cls_cmeth_ptypes[ci].split("|")
+      cmeth_defaults_all = @cls_cmeth_defaults[ci].split("|")
+      cmeth_cls_changed = 0
+      cmj = 0
+      while cmj < cmeth_params_all.length
+        if cmj < cmeth_ptypes_all.length
+          cm_pnames = cmeth_params_all[cmj].split(",")
+          cm_ptypes = cmeth_ptypes_all[cmj].split(",")
+          cm_defs_str = ""
+          if cmj < cmeth_defaults_all.length
+            cm_defs_str = cmeth_defaults_all[cmj]
+          end
+          cm_defs_arr = cm_defs_str.split(",")
+          cm_inner_changed = 0
+          cpk = 0
+          while cpk < cm_pnames.length
+            if cpk < cm_ptypes.length && cpk < cm_defs_arr.length
+              cm_def_id = cm_defs_arr[cpk].to_i
+              if cm_def_id >= 0 && @nd_type[cm_def_id] == "NilNode"
+                cm_pt = cm_ptypes[cpk]
+                if cm_pt == "int" || cm_pt == "symbol" || cm_pt == "float" || cm_pt == "bool"
+                  cm_ptypes[cpk] = "poly"
+                  @needs_rb_value = 1
+                  cm_inner_changed = 1
+                end
+              end
+            end
+            cpk = cpk + 1
+          end
+          if cm_inner_changed == 1
+            cmeth_ptypes_all[cmj] = cm_ptypes.join(",")
+            cmeth_cls_changed = 1
+          end
+        end
+        cmj = cmj + 1
+      end
+      if cmeth_cls_changed == 1
+        @cls_cmeth_ptypes[ci] = cmeth_ptypes_all.join("|")
+        @cls_cmeth_ptypes_version = @cls_cmeth_ptypes_version + 1
+      end
+      ci = ci + 1
+    end
+  end
+
  # Walk `nid` looking for `InstanceVariableWriteNode` whose RHS is
  # a `LocalVariableReadNode` named `pname`, and accumulate each
  # written-to ivar's declared slot type into `ivt_set` (unique).
@@ -17114,6 +17239,11 @@ class Compiler
  # hclk.nil?; end` — call sites pass int, body assigns string,
  # so the slot becomes poly).
     widen_param_types_from_body_writes
+ # Issue #634 shape A: explicit `= nil` default + typed-arg widening
+ # leaves a non-nullable scalar slot whose no-arg call site silently
+ # defaults to the zero value. Escalate those slots to poly so the
+ # nil branch stays observable.
+    widen_nil_default_params_to_poly
 
   # Top-level methods
     i = 0

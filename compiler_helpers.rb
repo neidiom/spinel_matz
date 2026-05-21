@@ -146,10 +146,12 @@ class Compiler
  # nid + arg_types let the helper apply the same arm-suppression
  # logic the emit loop uses (param-incompat + observed-class
  # narrow), so unreachable arms don't widen the result.
-  def poly_dispatch_return_type(mname, nid = -1, arg_types = nil)
-    if arg_types == nil
-      arg_types = "".split(",")
-    end
+  def poly_dispatch_return_type(mname, nid = -1, arg_types = "".split(","))
+ # arg_types defaults to an empty StrArray rather than nil so the
+ # nil-default + typed-callsite widening that #634 enables doesn't
+ # collapse this param's slot to poly. Both call sites always pass
+ # a concrete StrArray, so the empty default is observationally
+ # equivalent to the prior nil-then-replace.
     if mname == "[]"
       @needs_rb_value = 1
       return "poly"
