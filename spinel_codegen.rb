@@ -12437,6 +12437,15 @@ class Compiler
     if infer_type(nid) == "poly"
       return "(" + ce + ").v.i"
     end
+ # `--int-overflow=promote` widens int slots to bigint; many
+ # int-expecting C call sites (array indices, hash keys, range
+ # endpoints, ...) still need a raw mrb_int. Mirror compile_arg0
+ # _as_int's bigint arm so promote mode flows the unbox through
+ # the broader expr path.
+    if infer_type(nid) == "bigint"
+      @needs_bigint = 1
+      return "sp_bigint_to_int((sp_Bigint *)" + ce + ")"
+    end
     ce
   end
 
@@ -25734,11 +25743,18 @@ class Compiler
         rt = infer_type(tgt_recv)
         rc = compile_expr_gc_rooted(tgt_recv)
         idx = compile_expr(tgt_arg_ids[0])
+ # promote-mode-widened index: unbox to mrb_int for typed-array /
+ # int-keyed-hash recv sites that expect an int key.
+        idx_int_mt = idx
+        if infer_type(tgt_arg_ids[0]) == "bigint"
+          @needs_bigint = 1
+          idx_int_mt = "sp_bigint_to_int((sp_Bigint *)" + idx + ")"
+        end
         if rt == "float_array" || rt == "int_array"
           pfx = array_c_prefix(rt)
           tt = new_temp
           ti = new_temp
-          emit("  { sp_" + pfx + " *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx +
+          emit("  { sp_" + pfx + " *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx_int_mt +
                "; sp_" + pfx + "_set(" + tt + ", " + ti + ", (" + value_expr + ")); }")
         end
         if rt == "str_int_hash"
@@ -30268,12 +30284,17 @@ class Compiler
     rc = compile_expr_gc_rooted(recv)
     idx = compile_expr(arg_ids[0])
     val = compile_expr(@nd_expression[nid])
+    idx_int_io = idx
+    if infer_type(arg_ids[0]) == "bigint"
+      @needs_bigint = 1
+      idx_int_io = "sp_bigint_to_int((sp_Bigint *)" + idx + ")"
+    end
 
     if rt == "float_array" || rt == "int_array"
       pfx = array_c_prefix(rt)
       tt  = new_temp
       ti  = new_temp
-      emit("  { sp_" + pfx + " *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx +
+      emit("  { sp_" + pfx + " *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx_int_io +
            "; sp_" + pfx + "_set(" + tt + ", " + ti +
            ", sp_" + pfx + "_get(" + tt + ", " + ti + ") " + op + " (" + val + ")); }")
       return
@@ -30441,6 +30462,11 @@ class Compiler
     rt = infer_type(recv)
     rc = compile_expr_gc_rooted(recv)
     idx = compile_expr(arg_ids[0])
+    idx_int_ia = idx
+    if infer_type(arg_ids[0]) == "bigint"
+      @needs_bigint = 1
+      idx_int_ia = "sp_bigint_to_int((sp_Bigint *)" + idx + ")"
+    end
  # Note: defer compile_expr(@nd_expression[nid]) to inside each
  # if-branch so RHS side effects only fire when the get is truthy
  # (Ruby `&&=` short-circuit semantics).
@@ -30449,7 +30475,7 @@ class Compiler
       pfx = array_c_prefix(rt)
       tt = new_temp
       ti = new_temp
-      emit("  { sp_" + pfx + " *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx + ";")
+      emit("  { sp_" + pfx + " *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx_int_ia + ";")
       emit("    if (sp_" + pfx + "_get(" + tt + ", " + ti + ")) {")
       val = compile_expr(@nd_expression[nid])
       emit("      sp_" + pfx + "_set(" + tt + ", " + ti + ", (" + val + "));")
@@ -30506,6 +30532,11 @@ class Compiler
     rt = infer_type(recv)
     rc = compile_expr_gc_rooted(recv)
     idx = compile_expr(arg_ids[0])
+    idx_int_or = idx
+    if infer_type(arg_ids[0]) == "bigint"
+      @needs_bigint = 1
+      idx_int_or = "sp_bigint_to_int((sp_Bigint *)" + idx + ")"
+    end
  # Note: defer compile_expr(@nd_expression[nid]) to inside each
  # if-branch so RHS side effects only fire when the get is falsy
  # (Ruby `||=` short-circuit semantics).
@@ -30514,7 +30545,7 @@ class Compiler
       pfx = array_c_prefix(rt)
       tt = new_temp
       ti = new_temp
-      emit("  { sp_" + pfx + " *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx + ";")
+      emit("  { sp_" + pfx + " *" + tt + " = " + rc + "; mrb_int " + ti + " = " + idx_int_or + ";")
       emit("    if (!sp_" + pfx + "_get(" + tt + ", " + ti + ")) {")
       val = compile_expr(@nd_expression[nid])
       emit("      sp_" + pfx + "_set(" + tt + ", " + ti + ", (" + val + "));")
