@@ -12132,6 +12132,13 @@ class Compiler
               if it == "int"
                 fmt = fmt + "%lld"
                 arg_exprs.push("(long long)" + compile_expr(inner))
+              elsif it == "bigint"
+ # promote-mode interpolation of an Integer LV: route
+ # through sp_bigint_to_s so the displayed value is the
+ # bigint's decimal repr, not a pointer cast to long long.
+                @needs_bigint = 1
+                fmt = fmt + "%s"
+                arg_exprs.push("sp_bigint_to_s((sp_Bigint *)" + compile_expr(inner) + ")")
               else
                 if it == "float"
  # CRuby's Float#to_s (which is what `"#{x}"` calls)
@@ -14873,6 +14880,9 @@ class Compiler
               parts.push(compile_expr(aargs[0]))
             elsif at == "int"
               parts.push("sp_int_to_s(" + compile_expr(aargs[0]) + ")")
+            elsif at == "bigint"
+              @needs_bigint = 1
+              parts.push("sp_bigint_to_s((sp_Bigint *)" + compile_expr(aargs[0]) + ")")
             elsif at == "float"
               parts.push("sp_float_to_s(" + compile_expr(aargs[0]) + ")")
             else
@@ -27449,6 +27459,9 @@ class Compiler
               val = compile_expr(argl[0])
               if at == "int"
                 emit("  sp_String_append(" + rc + ", sp_int_to_s(" + val + "));")
+              elsif at == "bigint"
+                @needs_bigint = 1
+                emit("  sp_String_append(" + rc + ", sp_bigint_to_s((sp_Bigint *)" + val + "));")
               else
                 if at == "mutable_str"
                   emit("  sp_String_append(" + rc + ", " + val + "->data);")
