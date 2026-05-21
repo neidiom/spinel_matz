@@ -15420,12 +15420,12 @@ class Compiler
       if lt == "int_array"
         @needs_int_array = 1
         rc = compile_expr_gc_rooted(recv)
-        return "(sp_IntArray_push(" + rc + ", " + compile_arg0(nid) + "), " + rc + ")"
+        return "(sp_IntArray_push(" + rc + ", " + compile_arg0_as_int(nid) + "), " + rc + ")"
       end
       if lt == "float_array"
         @needs_float_array = 1
         rc = compile_expr_gc_rooted(recv)
-        return "(sp_FloatArray_push(" + rc + ", " + compile_arg0(nid) + "), " + rc + ")"
+        return "(sp_FloatArray_push(" + rc + ", " + compile_arg0_as_float(nid) + "), " + rc + ")"
       end
       if lt == "str_array"
         @needs_str_array = 1
@@ -17508,7 +17508,7 @@ class Compiler
         return "sp_IntArray_empty(" + rc + ")"
       end
       if mname == "include?"
-        return "sp_IntArray_include(" + rc + ", " + compile_arg0(nid) + ")"
+        return "sp_IntArray_include(" + rc + ", " + compile_arg0_as_int(nid) + ")"
       end
       if mname == "index" || mname == "find_index"
         if @nd_arguments[nid] >= 0
@@ -17517,12 +17517,12 @@ class Compiler
  # not-found; the call result is statically int?, so `.nil?`
  # tests fold to a sentinel compare and downstream arithmetic
  # under a nil-guard skips the box/unbox round-trip.
-          return "sp_IntArray_index_opt(" + rc + ", " + compile_arg0(nid) + ")"
+          return "sp_IntArray_index_opt(" + rc + ", " + compile_arg0_as_int(nid) + ")"
         end
       end
       if mname == "rindex"
         if @nd_arguments[nid] >= 0
-          return "sp_IntArray_rindex_opt(" + rc + ", " + compile_arg0(nid) + ")"
+          return "sp_IntArray_rindex_opt(" + rc + ", " + compile_arg0_as_int(nid) + ")"
         end
       end
       if mname == "delete_at"
@@ -27354,6 +27354,9 @@ class Compiler
           if a0id >= 0
             if infer_type(a0id) == "lambda"
               av = "(mrb_int)" + av
+            elsif infer_type(a0id) == "bigint"
+              @needs_bigint = 1
+              av = "sp_bigint_to_int((sp_Bigint *)" + av + ")"
             end
           end
           emit("  sp_IntArray_push(" + rc + ", " + av + ");")
@@ -27568,7 +27571,9 @@ class Compiler
         if rt == "int_array" || rt == "sym_array"
           rc = compile_expr_gc_rooted(recv)
           av = compile_arg0(nid)
- # If pushing a lambda value, cast to mrb_int
+ # If pushing a lambda value, cast to mrb_int. With promote
+ # mode, an int_array.push(bigint_lv) sees a sp_Bigint * arg
+ # against an mrb_int param — unbox.
           a0id = -1
           args_id2 = @nd_arguments[nid]
           if args_id2 >= 0
@@ -27580,6 +27585,9 @@ class Compiler
           if a0id >= 0
             if infer_type(a0id) == "lambda"
               av = "(mrb_int)" + av
+            elsif infer_type(a0id) == "bigint"
+              @needs_bigint = 1
+              av = "sp_bigint_to_int((sp_Bigint *)" + av + ")"
             end
           end
           emit("  sp_IntArray_push(" + rc + ", " + av + ");")
