@@ -21520,6 +21520,27 @@ class Compiler
       end
     end
     annotate_all_node_types
+ # Promote-mode safety: annotate may have produced stale "int"
+ # entries for nodes whose inferred type derived from cached
+ # state captured before promote_int_to_bigint_globally landed
+ # (SuperNode reading cls_method_return's pre-promotion result,
+ # CallNode chains whose mid-tree return type was cached, etc.).
+ # Sweep `@nd_inferred_type` again and rewrite "int" -> "bigint"
+ # for node kinds whose concrete C emit is always bigint when the
+ # underlying slot is promoted.
+    if @int_overflow_mode == "promote"
+      ni_p = 0
+      while ni_p < @nd_inferred_type.length
+        tp = @nd_inferred_type[ni_p]
+        if tp == "int"
+          ntp = @nd_type[ni_p]
+          if ntp == "SuperNode" || ntp == "ForwardingSuperNode"
+            @nd_inferred_type[ni_p] = "bigint"
+          end
+        end
+        ni_p = ni_p + 1
+      end
+    end
  # Now that @nd_inferred_type is populated for every reachable
  # node, we can resolve `recv.method(...)`'s receiver class
  # cheaply. Check each RBS-pinned method's positional args at

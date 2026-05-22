@@ -36466,6 +36466,27 @@ class Compiler
       end
       val = compile_expr(last)
       expr_type = infer_type(last)
+ # Peek arith operands to upgrade a stale "int" expr_type into
+ # bigint when the actual emit produces bigint — mirrors the
+ # other call sites (compile_bigint_arg, compile_operator_expr,
+ # LV op-write).
+      if expr_type != "bigint" && @nd_type[last] == "CallNode"
+        ml_ret = @nd_name[last]
+        if ml_ret == "+" || ml_ret == "-" || ml_ret == "*" || ml_ret == "/" || ml_ret == "%" || ml_ret == "**"
+          ml_recv = @nd_receiver[last]
+          if ml_recv >= 0 && base_type(infer_type(ml_recv)) == "bigint"
+            expr_type = "bigint"
+          else
+            ml_args = @nd_arguments[last]
+            if ml_args >= 0
+              ma_ret = get_args(ml_args)
+              if ma_ret.length > 0 && base_type(infer_type(ma_ret[0])) == "bigint"
+                expr_type = "bigint"
+              end
+            end
+          end
+        end
+      end
       if expr_type == "lambda"
         if return_type == "int"
           emit("  return sp_lam_to_int(" + val + ");")
