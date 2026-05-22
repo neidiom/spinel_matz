@@ -22216,6 +22216,23 @@ class Compiler
     if sr < 0 || infer_type(sr) != "string"
       return ""
     end
+ # Skip the single-char fast path when the `[]` arg is a Range
+ # (or anything other than an int). `s[i..j] == "/"` should
+ # dispatch through sp_str_sub_range and a string compare, not
+ # cast a RangeNode to mrb_int. Issue #644.
+    sub_args_id = @nd_arguments[recv]
+    if sub_args_id >= 0
+      sub_a = get_args(sub_args_id)
+      if sub_a.length > 0
+        idx_t_chk = infer_type(sub_a[0])
+        if idx_t_chk == "range" || sub_a.length >= 2
+          return ""
+        end
+        if sub_a.length == 1 && @nd_type[sub_a[0]] == "RangeNode"
+          return ""
+        end
+      end
+    end
     str_c = compile_expr(sr)
     idx_c = compile_arg0(recv)
     ch = lit
