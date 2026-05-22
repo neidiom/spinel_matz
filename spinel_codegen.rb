@@ -17807,14 +17807,29 @@ class Compiler
  # CRuby semantics. Issue #555 case 08.
           if a_set.length >= 3
             val_tmp = new_temp
-            emit("  mrb_int " + val_tmp + " = " + compile_expr(a_set[a_set.length - 1]) + ";")
+            val_e_iae = compile_expr(a_set[a_set.length - 1])
+            if infer_type(a_set[a_set.length - 1]) == "bigint"
+              @needs_bigint = 1
+              val_e_iae = "sp_bigint_to_int((sp_Bigint *)" + val_e_iae + ")"
+            end
+            emit("  mrb_int " + val_tmp + " = " + val_e_iae + ";")
             return val_tmp
           end
           if a_set.length >= 2
             idx_tmp = new_temp
             val_tmp = new_temp
-            emit("  mrb_int " + idx_tmp + " = " + compile_expr(a_set[0]) + ";")
-            emit("  mrb_int " + val_tmp + " = " + compile_expr(a_set[1]) + ";")
+            idx_e_iae = compile_expr(a_set[0])
+            if infer_type(a_set[0]) == "bigint"
+              @needs_bigint = 1
+              idx_e_iae = "sp_bigint_to_int((sp_Bigint *)" + idx_e_iae + ")"
+            end
+            val_e_iae = compile_expr(a_set[1])
+            if infer_type(a_set[1]) == "bigint"
+              @needs_bigint = 1
+              val_e_iae = "sp_bigint_to_int((sp_Bigint *)" + val_e_iae + ")"
+            end
+            emit("  mrb_int " + idx_tmp + " = " + idx_e_iae + ";")
+            emit("  mrb_int " + val_tmp + " = " + val_e_iae + ";")
             emit("  sp_IntArray_set(" + rc + ", " + idx_tmp + ", " + val_tmp + ");")
             return val_tmp
           end
