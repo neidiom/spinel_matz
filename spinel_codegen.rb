@@ -30101,6 +30101,7 @@ class Compiler
       di = di + 1
     end
     bexpr = "0"
+    bexpr_t_proc = "int"
     body_stmts = ""
     if bbody >= 0
       bs = get_stmts(bbody)
@@ -30115,10 +30116,12 @@ class Compiler
               body_stmts = @out_lines.join(10.chr) + 10.chr
               @out_lines = "".split(",")
               bexpr = fiber_var_ref(@nd_name[bs[k]])
+              bexpr_t_proc = find_var_type(@nd_name[bs[k]])
             elsif lt != "void"
               body_stmts = @out_lines.join(10.chr) + 10.chr
               @out_lines = "".split(",")
               bexpr = compile_expr(bs[k])
+              bexpr_t_proc = lt
               extra = @out_lines.join(10.chr) + 10.chr
               @out_lines = "".split(",")
               body_stmts = body_stmts + extra
@@ -30135,6 +30138,38 @@ class Compiler
           @out_lines = "".split(",")
         end
       end
+    end
+ # Proc fn ABI returns mrb_int regardless of body type. Unbox a
+ # bigint body tail before return so the function signature
+ # matches; analogous to the same coerce in compile_yield_call
+ # _expr's tail. Also peek arith operands so a stale "int"
+ # bexpr_t_proc gets upgraded.
+    if base_type(bexpr_t_proc) != "bigint" && bbody >= 0
+      bs_chk = get_stmts(bbody)
+      if bs_chk.length > 0
+        bt_last = bs_chk.last
+        if @nd_type[bt_last] == "CallNode"
+          bmn_proc = @nd_name[bt_last]
+          if bmn_proc == "+" || bmn_proc == "-" || bmn_proc == "*" || bmn_proc == "/" || bmn_proc == "%" || bmn_proc == "**"
+            br_proc = @nd_receiver[bt_last]
+            if br_proc >= 0 && base_type(infer_type(br_proc)) == "bigint"
+              bexpr_t_proc = "bigint"
+            else
+              ba_proc = @nd_arguments[bt_last]
+              if ba_proc >= 0
+                aa_proc = get_args(ba_proc)
+                if aa_proc.length > 0 && base_type(infer_type(aa_proc[0])) == "bigint"
+                  bexpr_t_proc = "bigint"
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+    if base_type(bexpr_t_proc) == "bigint"
+      @needs_bigint = 1
+      bexpr = "sp_bigint_to_int((sp_Bigint *)(" + bexpr + "))"
     end
     pop_scope
     @in_proc_body = saved_in_proc_body
