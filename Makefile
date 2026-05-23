@@ -375,6 +375,12 @@ bootstrap: build/analyze3.c build/codegen3.c
 # ---- Test ----
 
 TESTS := $(wildcard test/*.rb)
+# Mode-incompatible tests: int_overflow_raises pins raise-mode semantics
+# (RangeError on overflow); under --int-overflow=promote the same code
+# auto-promotes to bigint and the expected output diverges by design.
+ifeq ($(SPINEL_INT_OVERFLOW),promote)
+TESTS := $(filter-out test/int_overflow_raises.rb,$(TESTS))
+endif
 TEST_TARGETS := $(patsubst test/%.rb,build/test-results/%.ok,$(TESTS))
 
 # `make test` is incremental via mtime tracking on .ok files;
