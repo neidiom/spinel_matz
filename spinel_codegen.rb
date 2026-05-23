@@ -22928,14 +22928,19 @@ class Compiler
  # `case x; when Range; r.include?(actual)` against a poly
  # receiver lands on the right path instead of falling through
  # to "0" (always-false).
-      if inc_arg_t == "int"
-        iac = "sp_IntArray_include((sp_IntArray *)" + recv_tmp + ".v.p, " + inc_arg + ")"
+      if inc_arg_t == "int" || base_type(inc_arg_t) == "bigint"
+        inc_arg_i = inc_arg
+        if base_type(inc_arg_t) == "bigint"
+          @needs_bigint = 1
+          inc_arg_i = "sp_bigint_to_int((sp_Bigint *)" + inc_arg + ")"
+        end
+        iac = "sp_IntArray_include((sp_IntArray *)" + recv_tmp + ".v.p, " + inc_arg_i + ")"
         iarhs = is_poly_ret == 1 ? "sp_box_bool(" + iac + ")" : iac
         emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_INT_ARRAY) " + result_tmp + " = " + iarhs + ";")
-        ishc = "sp_IntStrHash_has_key((sp_IntStrHash *)" + recv_tmp + ".v.p, " + inc_arg + ")"
+        ishc = "sp_IntStrHash_has_key((sp_IntStrHash *)" + recv_tmp + ".v.p, " + inc_arg_i + ")"
         ishrhs = is_poly_ret == 1 ? "sp_box_bool(" + ishc + ")" : ishc
         emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_INT_STR_HASH) " + result_tmp + " = " + ishrhs + ";")
-        rgc = "sp_range_include((sp_Range *)" + recv_tmp + ".v.p, " + inc_arg + ")"
+        rgc = "sp_range_include((sp_Range *)" + recv_tmp + ".v.p, " + inc_arg_i + ")"
         rgrhs = is_poly_ret == 1 ? "sp_box_bool(" + rgc + ")" : rgc
         emit("    if (" + recv_tmp + ".cls_id == SP_BUILTIN_RANGE) " + result_tmp + " = " + rgrhs + ";")
       end
