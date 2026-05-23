@@ -25672,7 +25672,7 @@ class Compiler
  # compiler rejects the push with "incompatible type".
       if et == "poly"
         ev = "(" + ev + ").v.i"
-      elsif et == "bigint"
+      elsif et == "bigint" || expr_emit_is_bigint(eid) == 1
  # promote-mode element: unbox to mrb_int.
         @needs_bigint = 1
         ev = "sp_bigint_to_int((sp_Bigint *)" + ev + ")"
