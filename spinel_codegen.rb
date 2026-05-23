@@ -5845,6 +5845,12 @@ class Compiler
  # few stdlib helpers still want mrb_int -- sp_bigint_to_int
  # covers that.
     if expected_base == "bigint" && at == "int"
+ # When the rhs's actual emit is already sp_Bigint * (a stale
+ # int cache hiding a bigint chain or user-method bigint
+ # return), skip the sp_bigint_new_int wrap.
+      if expr_emit_is_bigint(nid) == 1
+        return "(sp_Bigint *)" + val
+      end
       @needs_bigint = 1
       return "sp_bigint_new_int(" + val + ")"
     end
