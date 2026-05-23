@@ -8508,13 +8508,27 @@ class Compiler
     0
   end
 
+  def ivar_needs_gc_mark(t)
+    if ivar_is_gc_ptr(t) == 1
+      return 1
+    end
+    if is_value_type_obj(t) == 1
+      cname = t[4, t.length - 4]
+      ci = find_class_idx(cname)
+      if ci >= 0 && class_has_ptr_ivars(ci) == 1
+        return 1
+      end
+    end
+    0
+  end
+
   def class_has_ptr_ivars(ci)
     names = @cls_ivar_names[ci].split(";")
     types = @cls_ivar_types[ci].split(";")
     j = 0
     while j < names.length
       if j < types.length
-        if ivar_is_gc_ptr(types[j]) == 1
+        if ivar_needs_gc_mark(types[j]) == 1
           return 1
         end
       end
@@ -8568,12 +8582,28 @@ class Compiler
   def emit_gc_mark_ivar(field, t)
     if t == "poly"
       emit_raw("  sp_mark_rbval(" + field + ");")
+    elsif is_value_type_obj(t) == 1
+      cname = t[4, t.length - 4]
+      emit_raw("  sp_" + cname + "_gc_scan(&" + field + ");")
     else
       emit_raw("  if (" + field + ") sp_gc_mark((void *)" + field + ");")
     end
   end
 
   def emit_gc_scan_functions
+    emitted_proto = 0
+    i = 0
+    while i < @cls_names.length
+      if cls_emit_skipped(i) == 0 && class_has_ptr_ivars(i) == 1
+        emit_raw("static void sp_" + @cls_names[i] + "_gc_scan(void *p);")
+        emitted_proto = 1
+      end
+      i = i + 1
+    end
+    if emitted_proto == 1
+      emit_raw("")
+    end
+
     i = 0
     while i < @cls_names.length
       if cls_emit_skipped(i) == 1
@@ -8605,7 +8635,7 @@ class Compiler
                 end
               end
             end
-            if skip_inherited == 0 && ivar_is_gc_ptr(types[j]) == 1
+            if skip_inherited == 0 && ivar_needs_gc_mark(types[j]) == 1
               emit_gc_mark_ivar("self->" + sanitize_ivar(names[j]), types[j])
             end
           end
@@ -8620,7 +8650,7 @@ class Compiler
             pj = 0
             while pj < pnames.length
               if pj < ptypes.length
-                if ivar_is_gc_ptr(ptypes[pj]) == 1
+                if ivar_needs_gc_mark(ptypes[pj]) == 1
                   emit_gc_mark_ivar("self->" + sanitize_ivar(pnames[pj]), ptypes[pj])
                 end
               end
@@ -24908,7 +24938,7 @@ class Compiler
   def constructor_arg_needs_root(arg_type)
     bt = base_type(arg_type)
     if is_obj_type(bt) == 1
-      return 1
+      return type_is_pointer(bt)
     end
     if is_array_type(bt) == 1 || is_ptr_array_type(bt) == 1 || is_tuple_type(bt) == 1
       return 1
