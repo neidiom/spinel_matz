@@ -935,11 +935,15 @@ static int flatten(pm_node_t *node) {
     pm_super_node_t *n = (pm_super_node_t *)node;
     N("SuperNode");
     R("arguments", n->arguments);
+    R("block", n->block);
     break;
   }
-  case PM_FORWARDING_SUPER_NODE:
+  case PM_FORWARDING_SUPER_NODE: {
+    pm_forwarding_super_node_t *n = (pm_forwarding_super_node_t *)node;
     N("ForwardingSuperNode");
+    R("block", (pm_node_t *)n->block);
     break;
+  }
   case PM_MULTI_WRITE_NODE: {
     pm_multi_write_node_t *n = (pm_multi_write_node_t *)node;
     N("MultiWriteNode");

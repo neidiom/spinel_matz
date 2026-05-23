@@ -12867,6 +12867,22 @@ class Compiler
     if owner_su == ""
       return "0"
     end
+ # `super { ... }` carries a literal block. The parent method declares
+ # `_block, _benv` in its C signature when its body yields, so a plain
+ # `sp_Parent_test(self)` call type-checks too few arguments. Inline
+ # the parent body in place and substitute `yield` with the block body
+ # — same model the regular literal-block call path uses
+ # (compile_yield_call_expr). Issue #665.
+    blk_su = @nd_block[nid]
+    if blk_su >= 0 && @nd_type[blk_su] == "BlockNode"
+      owner_ci_su = find_class_idx(owner_su)
+      if owner_ci_su >= 0
+        midx_su = cls_find_method_direct(owner_ci_su, mname_su)
+        if midx_su >= 0
+          return compile_super_with_block_inline(nid, t, owner_ci_su, midx_su, blk_su)
+        end
+      end
+    end
     cast_self = "(sp_" + owner_su + " *)self"
     args_c = ""
     if t == "ForwardingSuperNode"
@@ -12895,7 +12911,159 @@ class Compiler
         end
       end
     end
-    "sp_" + owner_su + "_" + sanitize_name(mname_su) + "(" + cast_self + args_c + ")"
+ # Pad the trailing `_block, _benv` yield-ABI slots when the parent's
+ # body yields — the literal-block case is handled above, so on this
+ # branch we always pass NULL/NULL for the block slot. Issue #665.
+    yargs_su = ""
+    owner_ci_su2 = find_class_idx(owner_su)
+    if owner_ci_su2 >= 0
+      midx_su2 = cls_find_method_direct(owner_ci_su2, mname_su)
+      yargs_su = cls_call_yargs(owner_ci_su2, midx_su2)
+    end
+    "sp_" + owner_su + "_" + sanitize_name(mname_su) + "(" + cast_self + args_c + yargs_su + ")"
+  end
+
+ # `super { ... }` lowering. Mirrors compile_yield_call_expr but reads
+ # the inlined body / params / locals from the parent class's method
+ # tables (owner_ci, midx) rather than the top-level @meth_* tables.
+ # The block body replaces `yield` inside the parent body via the
+ # standard compile_stmt_with_block walker; the result temp captures
+ # the parent body's last expression so super's value can be
+ # propagated through enclosing expressions. Issue #665.
+  def compile_super_with_block_inline(nid, t, owner_ci, midx, blk)
+    bp_names = "".split(",")
+    bp_id = @nd_parameters[blk]
+    if bp_id >= 0
+      inner_bp = @nd_parameters[bp_id]
+      if inner_bp >= 0
+        reqs_bp = parse_id_list(@nd_requireds[inner_bp])
+        kbp = 0
+        while kbp < reqs_bp.length
+          bp_names.push(@nd_name[reqs_bp[kbp]])
+          kbp = kbp + 1
+        end
+      end
+    end
+    arg_ids_sw = []
+    if t == "SuperNode"
+      args_id_sw = @nd_arguments[nid]
+      if args_id_sw >= 0
+        arg_ids_sw = get_args(args_id_sw)
+      end
+    end
+    pnames = cls_meth_pnames_get(owner_ci, midx)
+    ptypes = cls_meth_ptypes_get(owner_ci, midx)
+    @block_counter = @block_counter + 1
+    suffix_sw = "_s" + @block_counter.to_s
+    map_from_sw = "".split(",")
+    map_to_sw = "".split(",")
+    cur_params_for_fwd = "".split(",")
+    if t == "ForwardingSuperNode"
+      cur_params_all = @cls_meth_params[@current_class_idx].split("|")
+      midx_cur_sw2 = cls_find_method_direct(@current_class_idx, @current_method_name)
+      if midx_cur_sw2 >= 0 && midx_cur_sw2 < cur_params_all.length
+        cur_params_for_fwd = cur_params_all[midx_cur_sw2].split(",")
+      end
+    end
+    kp_sw = 0
+    while kp_sw < pnames.length
+      pt_sw = "int"
+      if kp_sw < ptypes.length
+        pt_sw = ptypes[kp_sw]
+      end
+      tname_sw = pnames[kp_sw] + suffix_sw
+      val_sw = c_default_val(pt_sw)
+      if t == "ForwardingSuperNode"
+        if kp_sw < cur_params_for_fwd.length && cur_params_for_fwd[kp_sw] != ""
+          val_sw = "lv_" + cur_params_for_fwd[kp_sw]
+        end
+      else
+        if kp_sw < arg_ids_sw.length
+          val_sw = compile_expr(arg_ids_sw[kp_sw])
+          arg_t_sw = infer_type(arg_ids_sw[kp_sw])
+          if base_type(pt_sw) == "bigint" && arg_t_sw == "int"
+            @needs_bigint = 1
+            val_sw = "sp_bigint_new_int(" + val_sw + ")"
+          elsif base_type(pt_sw) == "int" && arg_t_sw == "bigint"
+            @needs_bigint = 1
+            val_sw = "sp_bigint_to_int((sp_Bigint *)" + val_sw + ")"
+          end
+        end
+      end
+      emit("  " + c_type(pt_sw) + " lv_" + tname_sw + " = " + val_sw + ";")
+      map_from_sw.push(pnames[kp_sw])
+      map_to_sw.push(tname_sw)
+      declare_var(tname_sw, pt_sw)
+      kp_sw = kp_sw + 1
+    end
+    bid_sw = -1
+    bodies_sw = @cls_meth_bodies[owner_ci].split(";")
+    if midx < bodies_sw.length
+      bid_sw = bodies_sw[midx].to_i
+    end
+    if bid_sw >= 0
+      flocals_n_sw = "".split(",")
+      flocals_t_sw = "".split(",")
+      sn_sw = @nd_scope_names[bid_sw]
+      if sn_sw != ""
+        flocals_n_sw = sn_sw.split("|")
+        flocals_t_sw = @nd_scope_types[bid_sw].split("|")
+      end
+      kf_sw = 0
+      while kf_sw < flocals_n_sw.length
+        tname_lv = flocals_n_sw[kf_sw] + suffix_sw
+        emit("  " + c_type(flocals_t_sw[kf_sw]) + " lv_" + tname_lv + " = " + c_default_val(flocals_t_sw[kf_sw]) + ";")
+        map_from_sw.push(flocals_n_sw[kf_sw])
+        map_to_sw.push(tname_lv)
+        declare_var(tname_lv, flocals_t_sw[kf_sw])
+        declare_var(flocals_n_sw[kf_sw], flocals_t_sw[kf_sw])
+        kf_sw = kf_sw + 1
+      end
+    end
+    rt_sw = "int"
+    returns_sw = @cls_meth_returns[owner_ci].split(";")
+    if midx < returns_sw.length
+      rt_sw = returns_sw[midx]
+    end
+    result_tmp_sw = new_temp
+    emit("  " + c_type(rt_sw) + " " + result_tmp_sw + " = " + c_return_default(rt_sw) + ";")
+    saved_rmf_sw = @inline_rename_map_from
+    saved_rmt_sw = @inline_rename_map_to
+    @inline_rename_map_from = map_from_sw
+    @inline_rename_map_to = map_to_sw
+    if bid_sw >= 0
+      stmts_sw = get_stmts(bid_sw)
+      ns_sw = stmts_sw.length
+      ks_sw = 0
+      while ks_sw < ns_sw - 1
+        compile_stmt_with_block(stmts_sw[ks_sw], blk, bp_names, map_from_sw, map_to_sw)
+        ks_sw = ks_sw + 1
+      end
+      if ns_sw > 0
+        last_sw = stmts_sw.last
+        last_ty_sw = @nd_type[last_sw]
+        if last_ty_sw == "YieldNode" || last_ty_sw == "IfNode" || last_ty_sw == "CaseNode" ||
+           last_ty_sw == "WhileNode" || last_ty_sw == "BeginNode" || last_ty_sw == "ReturnNode" ||
+           last_ty_sw == "LocalVariableWriteNode" || last_ty_sw == "InstanceVariableWriteNode" ||
+           last_ty_sw == "ClassVariableWriteNode" || last_ty_sw == "GlobalVariableWriteNode"
+          compile_stmt_with_block(last_sw, blk, bp_names, map_from_sw, map_to_sw)
+        else
+          last_val_sw = compile_expr_remap(last_sw, map_from_sw, map_to_sw)
+          last_t_sw = infer_type(last_sw)
+          if base_type(rt_sw) == "bigint" && last_t_sw == "int"
+            @needs_bigint = 1
+            last_val_sw = "sp_bigint_new_int(" + last_val_sw + ")"
+          elsif base_type(rt_sw) == "int" && last_t_sw == "bigint"
+            @needs_bigint = 1
+            last_val_sw = "sp_bigint_to_int((sp_Bigint *)" + last_val_sw + ")"
+          end
+          emit("  " + result_tmp_sw + " = " + last_val_sw + ";")
+        end
+      end
+    end
+    @inline_rename_map_from = saved_rmf_sw
+    @inline_rename_map_to = saved_rmt_sw
+    result_tmp_sw
   end
 
   def c_string_literal(s)
