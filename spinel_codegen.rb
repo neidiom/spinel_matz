@@ -14902,7 +14902,7 @@ class Compiler
     if mname == "sleep"
       args_id = @nd_arguments[nid]
       if args_id >= 0
-        emit("  sp_sleep((mrb_float)" + compile_arg0(nid) + ");")
+        emit("  sp_sleep(" + compile_arg0_as_float(nid) + ");")
       end
       return "0"
     end
@@ -17288,12 +17288,22 @@ class Compiler
               left = "0"
             else
               left = compile_expr(left_nid_543)
+ # promote-mode: range bounds may be bigint LVs; unbox to
+ # mrb_int for the runtime helper.
+              if infer_type(left_nid_543) == "bigint" || expr_emit_is_bigint(left_nid_543) == 1
+                @needs_bigint = 1
+                left = "sp_bigint_to_int((sp_Bigint *)" + left + ")"
+              end
             end
             if right_nid_543 < 0
               right = "-1"
               excl_543 = "0"
             else
               right = compile_expr(right_nid_543)
+              if infer_type(right_nid_543) == "bigint" || expr_emit_is_bigint(right_nid_543) == 1
+                @needs_bigint = 1
+                right = "sp_bigint_to_int((sp_Bigint *)" + right + ")"
+              end
               excl_543 = (range_excl_end(range_node_543) == 1 ? "1" : "0")
             end
             return (use_len ? "sp_str_sub_range_len_r" : "sp_str_sub_range_r") + "(" + lprefix + ", " + left + ", " + right + ", " + excl_543 + ")"
