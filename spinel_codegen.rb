@@ -35198,14 +35198,34 @@ class Compiler
         end
         ec_tmp_arr = new_temp
         ec_nested = 0
+        ec_use_poly = 0
         if ec_res_type == "string"
           @needs_str_array = 1
           emit("  sp_StrArray *" + ec_tmp_arr + " = sp_StrArray_new();")
         elsif ec_res_type == "float"
           emit("  sp_FloatArray *" + ec_tmp_arr + " = sp_FloatArray_new();")
+        elsif ec_res_type == "poly_array" || is_ptr_array_type(ec_res_type) == 1
+ # Block returns a deeper-nested array (poly_array or
+ # *_ptr_array): under promote mode the literal `[bigint, bigint]`
+ # cached as poly_array, so the outer accumulator must itself be
+ # PolyArray to keep the cls_id tag chain. Default-mode tests
+ # don't reach this arm (their block returns a concrete typed
+ # array and falls into the next branch).
+          @needs_rb_value = 1
+          ec_use_poly = 1
+          emit("  sp_PolyArray *" + ec_tmp_arr + " = sp_PolyArray_new();")
         elsif is_array_type(ec_res_type) == 1
           ec_nested = 1
           emit("  sp_PtrArray *" + ec_tmp_arr + " = sp_PtrArray_new();")
+        elsif ec_res_type == "bigint" || ec_res_type == "poly"
+ # Promote-mode block returning bigint (or any cached poly):
+ # the analyzer's infer_call_type widens the outer map result
+ # to poly_array, so build a PolyArray boxing each value. Keeps
+ # caller-side `p` / `.inspect` dispatch consistent with the
+ # type signature.
+          @needs_rb_value = 1
+          ec_use_poly = 1
+          emit("  sp_PolyArray *" + ec_tmp_arr + " = sp_PolyArray_new();")
         else
           @needs_int_array = 1
           emit("  sp_IntArray *" + ec_tmp_arr + " = sp_IntArray_new();")
@@ -35225,12 +35245,23 @@ class Compiler
         ec_pair_bp = ""
         if ec_destruct_names.length > 0
  # Destructure: bind each inner name directly to a window slot;
- # no sub-array allocation.
+ # no sub-array allocation. Under promote mode the analyzer widens
+ # scope LVs int->bigint so the block body's arithmetic dispatches
+ # via sp_bigint_*. Box each IntArray element to sp_Bigint* at the
+ # bind so the codegen and analyzer agree.
+          ec_destruct_promote = (@int_overflow_mode == "promote" && ec_elem_t == "int") ? 1 : 0
           ec_di = 0
           while ec_di < ec_destruct_names.length
             ec_slot = "lv_" + ec_destruct_names[ec_di]
-            emit("    " + c_type(ec_elem_t) + " " + ec_slot + " = sp_" + ec_inner_pfx + "_get(" + ec_inner_rc + ", " + ec_i + " + " + ec_di.to_s + ");")
-            declare_var(ec_destruct_names[ec_di], ec_elem_t)
+            ec_get_e = "sp_" + ec_inner_pfx + "_get(" + ec_inner_rc + ", " + ec_i + " + " + ec_di.to_s + ")"
+            if ec_destruct_promote == 1
+              @needs_bigint = 1
+              emit("    sp_Bigint * " + ec_slot + " = sp_bigint_new_int(" + ec_get_e + ");")
+              declare_var(ec_destruct_names[ec_di], "bigint")
+            else
+              emit("    " + c_type(ec_elem_t) + " " + ec_slot + " = " + ec_get_e + ";")
+              declare_var(ec_destruct_names[ec_di], ec_elem_t)
+            end
             ec_di = ec_di + 1
           end
         else
@@ -35250,8 +35281,19 @@ class Compiler
           if ec_idx_bp == ""
             ec_idx_bp = "_idx"
           end
-          emit("    mrb_int lv_" + ec_idx_bp + " = " + ec_idx_var + ";")
-          declare_var(ec_idx_bp, "int")
+ # Under promote mode the analyzer widens scope LVs int->bigint
+ # globally, including the with_index counter param. Match that
+ # on the codegen side so the block body's arithmetic on the
+ # counter dispatches via sp_bigint_* helpers consistently with
+ # the cached @nd_inferred_type entries.
+          if @int_overflow_mode == "promote"
+            @needs_bigint = 1
+            emit("    sp_Bigint * lv_" + ec_idx_bp + " = sp_bigint_new_int(" + ec_idx_var + ");")
+            declare_var(ec_idx_bp, "bigint")
+          else
+            emit("    mrb_int lv_" + ec_idx_bp + " = " + ec_idx_var + ";")
+            declare_var(ec_idx_bp, "int")
+          end
         end
         @indent = @indent + 1
         if ec_blk_n >= 0
@@ -35270,8 +35312,28 @@ class Compiler
               emit("  sp_FloatArray_push(" + ec_tmp_arr + ", " + ec_lastv + ");")
             elsif ec_nested == 1
               emit("  sp_PtrArray_push(" + ec_tmp_arr + ", " + ec_lastv + ");")
+            elsif ec_use_poly == 1
+ # PolyArray accumulator: box each element. If the block returns
+ # a deeper-nested poly_array (literal array of bigints in
+ # promote mode), wrap with sp_box_poly_array; otherwise the
+ # element is a scalar bigint (or stale-int bigint emit) and
+ # boxes via sp_box_int(sp_bigint_to_int(...)).
+              if ec_res_type == "poly_array" || is_ptr_array_type(ec_res_type) == 1
+                @needs_rb_value = 1
+                emit("  sp_PolyArray_push(" + ec_tmp_arr + ", sp_box_poly_array(" + ec_lastv + "));")
+              else
+                @needs_bigint = 1
+                emit("  sp_PolyArray_push(" + ec_tmp_arr + ", sp_box_int(sp_bigint_to_int((sp_Bigint *)" + ec_lastv + ")));")
+              end
             else
-              if infer_type(ec_stmts_n2.last) == "bigint"
+ # Only wrap with sp_bigint_to_int when the compiled expression
+ # actually produces an sp_Bigint *. The cached infer_type can lag
+ # the emit (in promote mode arith CallNodes get annotated bigint
+ # but the codegen-side compile_operator_expr still emits sp_int_add
+ # when both operands' compile-time C type is mrb_int) -- wrapping
+ # an mrb_int expr with sp_bigint_to_int((sp_Bigint *)...) casts
+ # the int to a pointer and dereferences garbage.
+              if (ec_lastv.start_with?("sp_bigint_") || ec_lastv.start_with?("(sp_Bigint *)"))
                 @needs_bigint = 1
                 ec_lastv = "sp_bigint_to_int((sp_Bigint *)" + ec_lastv + ")"
               end
