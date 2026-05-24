@@ -38274,6 +38274,18 @@ class Compiler
           if yk < cb_names.length
             v_y = compile_expr_remap(yaids[yk], nested_from, nested_to)
             dst = remap_local(cb_names[yk], map_from, map_to)
+ # Promote mode widens block params to bigint; an `int`-typed
+ # yield arg needs sp_bigint_new_int boxing before assignment
+ # so the destination slot's bigint pointer type matches.
+            dst_t = find_var_type(dst)
+            arg_t = infer_type(yaids[yk])
+            if base_type(dst_t) == "bigint" && arg_t == "int"
+              @needs_bigint = 1
+              v_y = "sp_bigint_new_int(" + v_y + ")"
+            elsif base_type(dst_t) == "int" && arg_t == "bigint"
+              @needs_bigint = 1
+              v_y = "sp_bigint_to_int((sp_Bigint *)" + v_y + ")"
+            end
             emit("  lv_" + dst + " = " + v_y + ";")
           end
           yk = yk + 1
