@@ -26791,6 +26791,25 @@ class Compiler
       end
       ev = compile_expr(eid)
       et = infer_type(eid)
+ # Block-param destructure (`|(x, y), i|` from a poly_array source)
+ # leaves x, y uncached by annotate_all_node_types — the cached
+ # type for `x - y` falls back to "int" while the actual emit
+ # picks `sp_poly_sub` (sp_RbVal) because find_var_type at codegen
+ # time sees x as poly. Refresh the cached classification by
+ # checking the receiver's CURRENT scope type. Issue surfaced via
+ # `each_cons_with_index_map_no_double_gets` under promote.
+      if et == "int" && @nd_type[eid] == "CallNode"
+        e_mn = @nd_name[eid]
+        if e_mn == "+" || e_mn == "-" || e_mn == "*" || e_mn == "/" || e_mn == "%" || e_mn == "**"
+          e_rcv = @nd_receiver[eid]
+          if e_rcv >= 0 && @nd_type[e_rcv] == "LocalVariableReadNode"
+            e_rcv_t = find_var_type(@nd_name[e_rcv])
+            if e_rcv_t == "poly"
+              et = "poly"
+            end
+          end
+        end
+      end
  # Unbox poly values when pushing into a (concrete) IntArray.
  # An ArrayNode literal whose elements are poly (e.g.
  # `[addr]` where addr's recorded type is sp_RbVal) needs the
