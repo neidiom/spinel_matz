@@ -15954,6 +15954,14 @@ class Compiler
 
  # Tuple methods
     if is_tuple_type(recv_type) == 1
+      if mname == "inspect" || mname == "to_s"
+ # Route through the shared tuple-inspect builder. Issues
+ # #724, #726.
+        ins_t = compile_inspect_for(recv_type, rc)
+        if ins_t != ""
+          return ins_t
+        end
+      end
       if mname == "[]"
         args_id = @nd_arguments[nid]
         if args_id >= 0
@@ -34755,6 +34763,46 @@ class Compiler
     end
     if at == "tuple:float,float"
       return "sp_sprintf(\"[%s, %s]\", sp_float_inspect(" + val + "->_0), sp_float_inspect(" + val + "->_1))"
+    end
+ # Generic tuple inspect for any other arity / element-type
+ # combination. Build "[<e0>, <e1>, ...]" with per-element
+ # formatters chosen by tuple_elem_type_at. Covers str
+ # partition (`tuple:string,string,string`) and the other
+ # tuple shapes that fell through before. Issues #724, #726.
+    if is_tuple_type(at) == 1
+      arity_ins = tuple_arity(at)
+      fmt = "["
+      args = ""
+      i_ins = 0
+      while i_ins < arity_ins
+        et = tuple_elem_type_at(at, i_ins)
+        sep = (i_ins == 0) ? "" : ", "
+        field = val + "->_" + i_ins.to_s
+        if et == "int"
+          fmt = fmt + sep + "%lld"
+          args = args + ", (long long)" + field
+        elsif et == "float"
+          fmt = fmt + sep + "%s"
+          args = args + ", sp_float_inspect(" + field + ")"
+        elsif et == "string" || et == "mutable_str"
+          fmt = fmt + sep + "\\\"%s\\\""
+          src = (et == "mutable_str") ? "(const char *)(" + field + "->data)" : field
+          args = args + ", " + src
+        elsif et == "symbol"
+          fmt = fmt + sep + ":%s"
+          args = args + ", sp_sym_name((sp_sym)" + field + ")"
+        elsif et == "bool"
+          fmt = fmt + sep + "%s"
+          args = args + ", (" + field + ") ? \"true\" : \"false\""
+        elsif et == "nil"
+          fmt = fmt + sep + "nil"
+        else
+          fmt = fmt + sep + "?"
+        end
+        i_ins = i_ins + 1
+      end
+      fmt = fmt + "]"
+      return "sp_sprintf(\"" + fmt + "\"" + args + ")"
     end
     if at == "sym_int_hash"
       @needs_sym_int_hash = 1
