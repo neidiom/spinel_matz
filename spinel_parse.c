@@ -1322,18 +1322,33 @@ static int sp_included_cap = 0;
 
 /* Resolve a path to its canonical form for dedup. realpath() returns NULL
    on missing files; in that case fall back to the literal path. */
+/* Issue #749: realpath/_fullpath + strdup can both fail under OOM,
+   leaving callers with a NULL pointer that goes to strcmp(NULL, ...)
+   and segfaults. Fall back to a static empty string so downstream
+   `strcmp(canonical, ...) == 0` consistently misses (the caller then
+   treats this as "not already included" and proceeds with the file
+   read, which fails through the normal LoadError path). */
 static char *sp_canonical_path(const char *path) {
+  if (!path) { char *e = strdup(""); return e ? e : NULL; }
 #ifdef _WIN32
   char *real = _fullpath(NULL, path, 0);
 #else
   char *real = realpath(path, NULL);
 #endif
-  return real ? real : strdup(path);
+  if (real) return real;
+  char *d = strdup(path);
+  if (d) return d;
+  /* Last resort: return a static empty string to avoid NULL. The
+     buffer is read-only by callers (passed to strcmp, then freed by
+     the caller's free() -- so allocate a fresh empty string instead
+     of returning a string literal). */
+  return strdup("");
 }
 
 static int sp_path_already_included(const char *canonical) {
+  if (!canonical) return 0;
   for (int i = 0; i < sp_included_count; i++) {
-    if (strcmp(sp_included_paths[i], canonical) == 0) return 1;
+    if (sp_included_paths[i] && strcmp(sp_included_paths[i], canonical) == 0) return 1;
   }
   return 0;
 }
