@@ -647,6 +647,14 @@ class Compiler
     @inline_rename_map_from = nil
     @inline_rename_map_to = nil
 
+ # When inlining a yield-using method body in expression context,
+ # any YieldNode encountered as a sub-expression (e.g. `arr.push(yield)`,
+ # `yield * 2`) needs to materialize the block body's last value into
+ # a temp. These fields carry the necessary block context through
+ # compile_expr_remap. `_blk` is -1 when not inlining.
+    @inline_yield_blk = -1
+    @inline_yield_bp_names = nil
+
  # Symbol type Phase 2 Step 1: intern table (infrastructure only; unused yet).
     @sym_names = "".split(",")
 
@@ -4042,6 +4050,9 @@ class Compiler
       return 1
     end
     if t == "proc"
+      return 1
+    end
+    if t == "exception"
       return 1
     end
     if is_obj_type(t) == 1
@@ -12345,6 +12356,16 @@ class Compiler
       return "0"
     end
     t = @nd_type[nid]
+    if t == "YieldNode" && @inline_yield_blk >= 0
+ # Yield used as a sub-expression inside an inlined yield-using
+ # method body (`arr.push(yield)`, `yield * 2`, etc.). Materialize
+ # the block body's last value into a temp and return that temp.
+ # The @inline_yield_blk guard restricts this expansion to the
+ # inlining window; outside of it, YieldNode in expression context
+ # is meaningless and falls through to the default int-0.
+      empty_map = "".split(",")
+      return compile_yield_inline_expr(nid, @inline_yield_blk, @inline_yield_bp_names, empty_map, empty_map)
+    end
     if t == "UnsupportedNode"
  # The parser emitted this sentinel because it hit a Prism node
  # type it doesn't know how to serialize. Refusing to compile is
@@ -38122,6 +38143,10 @@ class Compiler
     saved_in_rmt = @inline_rename_map_to
     @inline_rename_map_from = param_map_from
     @inline_rename_map_to = param_map_to
+    saved_iyb = @inline_yield_blk
+    saved_iybp = @inline_yield_bp_names
+    @inline_yield_blk = blk
+    @inline_yield_bp_names = bp_names
     if bid >= 0
       stmts = get_stmts(bid)
       k = 0
@@ -38132,6 +38157,8 @@ class Compiler
     end
     @inline_rename_map_from = saved_in_rmf
     @inline_rename_map_to = saved_in_rmt
+    @inline_yield_blk = saved_iyb
+    @inline_yield_bp_names = saved_iybp
   end
 
  # expression-context counterpart of compile_yield_call_stmt.
@@ -38226,6 +38253,10 @@ class Compiler
     saved_in_rmt = @inline_rename_map_to
     @inline_rename_map_from = param_map_from
     @inline_rename_map_to = param_map_to
+    saved_iyb = @inline_yield_blk
+    saved_iybp = @inline_yield_bp_names
+    @inline_yield_blk = blk
+    @inline_yield_bp_names = bp_names
     if bid >= 0
       stmts = get_stmts(bid)
       n = stmts.length
@@ -38237,7 +38268,13 @@ class Compiler
       if n > 0
         last_y = stmts.last
         last_t = @nd_type[last_y]
-        if last_t == "YieldNode" || last_t == "IfNode" || last_t == "CaseNode" ||
+        if last_t == "YieldNode"
+ # `def f; yield; end` shape: the yield IS the return value. The
+ # generic stmt-shaped path would drop the block body's value;
+ # inline the yield and capture the block body's last expr into
+ # result_tmp so `f { 99 }` returns 99 instead of 0.
+          compile_yield_inline_capture(last_y, blk, bp_names, param_map_from, param_map_to, result_tmp, rt_yc)
+        elsif last_t == "IfNode" || last_t == "CaseNode" ||
            last_t == "WhileNode" || last_t == "BeginNode" || last_t == "ReturnNode" ||
            last_t == "LocalVariableWriteNode" || last_t == "InstanceVariableWriteNode" ||
            last_t == "ClassVariableWriteNode" || last_t == "GlobalVariableWriteNode"
@@ -38261,7 +38298,154 @@ class Compiler
     end
     @inline_rename_map_from = saved_in_rmf
     @inline_rename_map_to = saved_in_rmt
+    @inline_yield_blk = saved_iyb
+    @inline_yield_bp_names = saved_iybp
     result_tmp
+  end
+
+ # Yield in expression position (as a sub-expression of any
+ # statement / expression in the inlined body). Returns the C
+ # expression that holds the block body's last value. Emits the
+ # block-param assignment and the block body's non-last stmts as
+ # side effects.
+  def compile_yield_inline_expr(yield_nid, blk, bp_names, map_from, map_to)
+    args_id_ye = @nd_arguments[yield_nid]
+    assigned_ye = 0
+    if args_id_ye >= 0
+      aids_ye = get_args(args_id_ye)
+      kye = 0
+      while kye < aids_ye.length
+        if kye < bp_names.length
+          bp_t_ye = find_var_type(bp_names[kye])
+          arg_v_ye = compile_expr_remap(aids_ye[kye], map_from, map_to)
+          arg_t_ye = infer_type(aids_ye[kye])
+          arg_emit_bigint_ye = expr_emit_is_bigint(aids_ye[kye]) == 1
+          if bp_t_ye == "bigint" && arg_t_ye == "int" && !arg_emit_bigint_ye
+            @needs_bigint = 1
+            arg_v_ye = "sp_bigint_new_int(" + arg_v_ye + ")"
+          elsif bp_t_ye == "int" && (arg_t_ye == "bigint" || arg_emit_bigint_ye)
+            @needs_bigint = 1
+            arg_v_ye = "sp_bigint_to_int((sp_Bigint *)" + arg_v_ye + ")"
+          end
+          emit("  lv_" + bp_names[kye] + " = " + arg_v_ye + ";")
+          assigned_ye = assigned_ye + 1
+        end
+        kye = kye + 1
+      end
+    end
+    while assigned_ye < bp_names.length
+      bp_rt_ye = find_var_type(bp_names[assigned_ye])
+      if bp_rt_ye == "bigint"
+        @needs_bigint = 1
+        emit("  lv_" + bp_names[assigned_ye] + " = sp_bigint_new_int(0);")
+      else
+        emit("  lv_" + bp_names[assigned_ye] + " = 0;")
+      end
+      assigned_ye = assigned_ye + 1
+    end
+    body_ye = @nd_body[blk]
+    if body_ye < 0
+      return "0"
+    end
+    bstmts_ye = get_stmts(body_ye)
+    bn_ye = bstmts_ye.length
+    if bn_ye == 0
+      return "0"
+    end
+    bk_ye = 0
+    while bk_ye < bn_ye - 1
+      compile_stmt(bstmts_ye[bk_ye])
+      bk_ye = bk_ye + 1
+    end
+    last_be = bstmts_ye.last
+    last_bet = @nd_type[last_be]
+    if last_bet == "IfNode" || last_bet == "CaseNode" ||
+       last_bet == "WhileNode" || last_bet == "BeginNode" || last_bet == "ReturnNode" ||
+       last_bet == "LocalVariableWriteNode" || last_bet == "InstanceVariableWriteNode" ||
+       last_bet == "ClassVariableWriteNode" || last_bet == "GlobalVariableWriteNode"
+      compile_stmt(last_be)
+      return "0"
+    end
+    last_be_t = infer_type(last_be)
+    res_ye = new_temp
+    emit("  " + c_type(last_be_t) + " " + res_ye + " = " + compile_expr(last_be) + ";")
+    res_ye
+  end
+
+ # Yield in expression position when it is the inlined method body's
+ # last statement: emit the block-param assignment for the yielded
+ # args (same as the YieldNode arm in compile_stmt_with_block), then
+ # walk the block body emitting each stmt except the last as a stmt,
+ # and capture the last expression into `result_tmp`. Coerces the
+ # captured value if rt_yc is bigint and the expr is plain int (and
+ # the inverse), matching the coercion the expression-shaped branch
+ # of compile_yield_call_expr already does.
+  def compile_yield_inline_capture(yield_nid, blk, bp_names, map_from, map_to, result_tmp, rt_yc)
+    args_id_yic = @nd_arguments[yield_nid]
+    assigned_yic = 0
+    if args_id_yic >= 0
+      aids_yic = get_args(args_id_yic)
+      kyic = 0
+      while kyic < aids_yic.length
+        if kyic < bp_names.length
+          bp_t_yic = find_var_type(bp_names[kyic])
+          arg_v_yic = compile_expr_remap(aids_yic[kyic], map_from, map_to)
+          arg_t_yic = infer_type(aids_yic[kyic])
+          arg_emit_bigint_yic = expr_emit_is_bigint(aids_yic[kyic]) == 1
+          if bp_t_yic == "bigint" && arg_t_yic == "int" && !arg_emit_bigint_yic
+            @needs_bigint = 1
+            arg_v_yic = "sp_bigint_new_int(" + arg_v_yic + ")"
+          elsif bp_t_yic == "int" && (arg_t_yic == "bigint" || arg_emit_bigint_yic)
+            @needs_bigint = 1
+            arg_v_yic = "sp_bigint_to_int((sp_Bigint *)" + arg_v_yic + ")"
+          end
+          emit("  lv_" + bp_names[kyic] + " = " + arg_v_yic + ";")
+          assigned_yic = assigned_yic + 1
+        end
+        kyic = kyic + 1
+      end
+    end
+    while assigned_yic < bp_names.length
+      bp_rt_yic = find_var_type(bp_names[assigned_yic])
+      if bp_rt_yic == "bigint"
+        @needs_bigint = 1
+        emit("  lv_" + bp_names[assigned_yic] + " = sp_bigint_new_int(0);")
+      else
+        emit("  lv_" + bp_names[assigned_yic] + " = 0;")
+      end
+      assigned_yic = assigned_yic + 1
+    end
+    body_yic = @nd_body[blk]
+    if body_yic >= 0
+      bstmts = get_stmts(body_yic)
+      bn = bstmts.length
+      bk = 0
+      while bk < bn - 1
+        compile_stmt(bstmts[bk])
+        bk = bk + 1
+      end
+      if bn > 0
+        last_b = bstmts.last
+        last_bt = @nd_type[last_b]
+        if last_bt == "IfNode" || last_bt == "CaseNode" ||
+           last_bt == "WhileNode" || last_bt == "BeginNode" || last_bt == "ReturnNode" ||
+           last_bt == "LocalVariableWriteNode" || last_bt == "InstanceVariableWriteNode" ||
+           last_bt == "ClassVariableWriteNode" || last_bt == "GlobalVariableWriteNode"
+          compile_stmt(last_b)
+        else
+          last_v_yic = compile_expr(last_b)
+          last_et = infer_type(last_b)
+          if base_type(rt_yc) == "bigint" && last_et == "int"
+            @needs_bigint = 1
+            last_v_yic = "sp_bigint_new_int(" + last_v_yic + ")"
+          elsif base_type(rt_yc) == "int" && last_et == "bigint"
+            @needs_bigint = 1
+            last_v_yic = "sp_bigint_to_int((sp_Bigint *)" + last_v_yic + ")"
+          end
+          emit("  " + result_tmp + " = " + last_v_yic + ";")
+        end
+      end
+    end
   end
 
   def compile_stmt_with_block(nid, blk, bp_names, map_from, map_to)
@@ -38569,6 +38753,14 @@ class Compiler
       return "0"
     end
     t = @nd_type[nid]
+    if t == "YieldNode" && @inline_yield_blk >= 0
+ # Yield used as a sub-expression inside an inlined yield-using
+ # method body (e.g. `arr.push(yield)`, `yield * 2`). Pre-emit the
+ # block-param assignment + the block body's non-last stmts, then
+ # capture the block body's last expr into a temp and return that
+ # temp. compile_yield_inline_expr handles all the bookkeeping.
+      return compile_yield_inline_expr(nid, @inline_yield_blk, @inline_yield_bp_names, map_from, map_to)
+    end
     if t == "LocalVariableReadNode"
       rname = remap_local(@nd_name[nid], map_from, map_to)
  # Mirror compile_expr's LocalVariableReadNode unbox arm so a
@@ -40118,7 +40310,11 @@ class Compiler
  # type) to bigint at analyze time, so a literal/int-typed
  # fall-through last expression must be wrapped before return.
  # The reverse direction covers callers that still want mrb_int.
-        emit("  return " + maybe_bigint_coerce(val, expr_type, return_type) + ";")
+ # When the body raises (sets @needs_setjmp) the LV slot may be
+ # declared `volatile T *`; the non-volatile return signature
+ # rejects without an explicit cast. cast_away_volatile_arg
+ # detects this shape and emits the `(T *)` strip.
+        emit("  return " + maybe_bigint_coerce(cast_away_volatile_arg(last, val), expr_type, return_type) + ";")
       end
     else
       compile_stmt(last)
