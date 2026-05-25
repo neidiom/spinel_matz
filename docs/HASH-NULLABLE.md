@@ -51,6 +51,24 @@ Mapping per variant:
 | `IntStrHash` | `NULL` | `string` |
 | `*PolyHash` | (unchanged) | `poly` (already nullable via box_nil) |
 
+### Sym-valued hashes
+
+spinel currently has no dedicated `*SymHash` variant (no `sym_sym_hash`,
+`str_sym_hash`, or `int_sym_hash`). Hash literals with symbol values
+(e.g. `{a: :x}`) infer as `sym_poly_hash` / `str_poly_hash` etc. and
+box symbols into `sp_RbVal` (SP_TAG_SYM) -- so missing-key already
+returns `sp_box_nil()`, Ruby-compatible.
+
+If a future memory-optimization Phase introduces dedicated
+`*SymHash` variants (sp_sym = mrb_int storage, 8 bytes/entry vs
+sp_RbVal's 16 bytes), the natural nil sentinel is
+`((sp_sym)-1)` -- which already serves as `c_default_val("symbol")`
+in spinel_codegen.rb. The intern table's index 0 is reserved for
+the first symbol, so -1 is unambiguously "no symbol". A
+`sym?` scalar-nullable type would follow the same shape as
+`int?` (sentinel-based, not pointer-based), gated on
+`is_scalar_nullable_type`. Out of scope for the current rollout.
+
 ## Call-site Audit
 
 ### Internal-safe callers (no change needed)
