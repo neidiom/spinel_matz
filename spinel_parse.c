@@ -36,8 +36,11 @@ static void out_add(const char *fmt, ...) {
   vsnprintf(buf, sizeof(buf), fmt, ap);
   va_end(ap);
   if (line_count >= line_cap) {
-    line_cap = line_cap * 2 + 256;
-    lines = realloc(lines, sizeof(char *) * line_cap);
+    size_t new_cap = line_cap * 2 + 256;
+    char **new_lines = realloc(lines, sizeof(char *) * new_cap);
+    if (!new_lines) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+    lines = new_lines;
+    line_cap = new_cap;
   }
   lines[line_count++] = strdup(buf);
 }
@@ -108,11 +111,21 @@ static void emit_int(int id, const char *field, long long val) {
 }
 
 static void emit_float(int id, const char *field, double val) {
+  /* Issue #766: 64-byte buf; "%.17g" produces at most 24 chars, plus
+     ".0" trailer = 26. Safe by margin.
+     Issue #767: snprintf is locale-sensitive (de_DE produces "3,14"
+     for 3.14, which then fails to parse as a C float literal).
+     Format into a fresh sprintf via the C locale by using a manual
+     dot conversion: produce in current locale then replace ',' -> '.'.
+     The lib-side replacement is safe because Ruby float literals never
+     contain a comma. */
   char buf[64];
   snprintf(buf, sizeof(buf), "%.17g", val);
-  /* Ensure there's a decimal point (Ruby outputs 0.0, not 0) */
-  if (!strchr(buf, '.') && !strchr(buf, 'e') && !strchr(buf, 'E'))
-    strcat(buf, ".0");
+  for (char *p = buf; *p; p++) if (*p == ',') *p = '.';
+  if (!strchr(buf, '.') && !strchr(buf, 'e') && !strchr(buf, 'E')) {
+    size_t l = strlen(buf);
+    if (l + 3 < sizeof(buf)) strcat(buf, ".0");
+  }
   out_add("F %d %s %s", id, field, buf);
 }
 
@@ -139,8 +152,11 @@ static void emit_node_array(int id, const char *field, pm_node_list_t *list) {
   for (size_t i = 0; i < list->size; i++) {
     /* worst case per iter: ", -2147483648\0" -> 14 bytes; reserve 16 to be safe */
     if (pos + 16 >= cap) {
-      cap = cap * 2 + 16;
-      buf = realloc(buf, cap);
+      size_t new_cap = cap * 2 + 16;
+      char *nb = realloc(buf, new_cap);
+      if (!nb) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+      buf = nb;
+      cap = new_cap;
     }
     if (i > 0) buf[pos++] = ',';
     int n = snprintf(buf + pos, cap - pos, "%d", ids[i]);
@@ -1312,9 +1328,11 @@ static int sp_path_already_included(const char *canonical) {
 
 static void sp_mark_path_included(const char *canonical) {
   if (sp_included_count >= sp_included_cap) {
-    sp_included_cap = sp_included_cap == 0 ? 16 : sp_included_cap * 2;
-    sp_included_paths = (char **)realloc(sp_included_paths,
-                                         sizeof(char *) * sp_included_cap);
+    int new_cap = sp_included_cap == 0 ? 16 : sp_included_cap * 2;
+    char **np = (char **)realloc(sp_included_paths, sizeof(char *) * new_cap);
+    if (!np) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+    sp_included_paths = np;
+    sp_included_cap = new_cap;
   }
   sp_included_paths[sp_included_count++] = strdup(canonical);
 }
@@ -1541,7 +1559,7 @@ static char *rewrite_syntax_sugar(char *source) {
   size_t oi = 0;
   size_t i = 0;
 
-  #define OUT_CHAR(c) do { if (oi >= cap - 1) { cap *= 2; out = realloc(out, cap); } out[oi++] = (c); } while(0)
+  #define OUT_CHAR(c) do { if (oi >= cap - 1) { size_t _nc = cap * 2; char *_no = realloc(out, _nc); if (!_no) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); } out = _no; cap = _nc; } out[oi++] = (c); } while(0)
   #define OUT_STR(s) do { const char *_s = (s); while (*_s) { OUT_CHAR(*_s); _s++; } } while(0)
 
   /* Rewrite one .send(:foo / .send("foo dispatch. `string_form` is 1

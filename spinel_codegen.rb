@@ -17728,8 +17728,14 @@ class Compiler
               end
               if fi < lit.length
                 c = lit[fi]
+ # Issue #752: every integer conversion specifier needs the `ll`
+ # length modifier so mrb_int (int64) isn't read as int. CRuby's
+ # `%x`, `%o`, `%u`, `%X`, `%b` all operate on Integer, so each
+ # gets the `ll` prefix in spinel's emit.
                 if c == "d" || c == "i"
                   rewritten = rewritten + "lld"
+                elsif c == "x" || c == "X" || c == "o" || c == "u"
+                  rewritten = rewritten + "ll" + c
                 else
                   rewritten = rewritten + c
                 end
@@ -35228,13 +35234,56 @@ class Compiler
     if arg_ids.length < 1
       return
     end
+ # Issue #751: cast int args as (long long) and rewrite integer format
+ # specifiers (%d/%i/%x/%X/%o/%u) to include the `ll` length so
+ # mrb_int (int64) isn't truncated to int. Same shape as the
+ # String#% literal-format rewrite (line ~17729).
     fmt_expr = compile_expr(arg_ids[0])
+    if @nd_type[arg_ids[0]] == "StringNode"
+      lit_pf = @nd_unescaped[arg_ids[0]]
+      if lit_pf == ""
+        lit_pf = @nd_content[arg_ids[0]]
+      end
+      rewritten_pf = ""
+      fi_pf = 0
+      while fi_pf < lit_pf.length
+        if lit_pf[fi_pf] == "%"
+          rewritten_pf = rewritten_pf + "%"
+          fi_pf = fi_pf + 1
+          while fi_pf < lit_pf.length
+            cp = lit_pf[fi_pf]
+            if cp == "-" || cp == "+" || cp == " " || cp == "#" || cp == "0" || (cp >= "1" && cp <= "9") || cp == "."
+              rewritten_pf = rewritten_pf + cp
+              fi_pf = fi_pf + 1
+            else
+              fi_pf = fi_pf  # exit inner loop
+              break
+            end
+          end
+          if fi_pf < lit_pf.length
+            cp = lit_pf[fi_pf]
+            if cp == "d" || cp == "i"
+              rewritten_pf = rewritten_pf + "lld"
+            elsif cp == "x" || cp == "X" || cp == "o" || cp == "u"
+              rewritten_pf = rewritten_pf + "ll" + cp
+            else
+              rewritten_pf = rewritten_pf + cp
+            end
+            fi_pf = fi_pf + 1
+          end
+        else
+          rewritten_pf = rewritten_pf + lit_pf[fi_pf]
+          fi_pf = fi_pf + 1
+        end
+      end
+      fmt_expr = c_string_literal(rewritten_pf)
+    end
     rest_args = ""
     k = 1
     while k < arg_ids.length
       at = infer_type(arg_ids[k])
       if at == "int"
-        rest_args = rest_args + ", (int)" + compile_expr(arg_ids[k])
+        rest_args = rest_args + ", (long long)" + compile_expr(arg_ids[k])
       else
         rest_args = rest_args + ", " + compile_expr(arg_ids[k])
       end
