@@ -20129,9 +20129,6 @@ class Compiler
  # Array methods
     if recv_type == "int_array" || recv_type == "sym_array"
       if mname == "length" || mname == "size"
-        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
-          return @hoisted_strlen_var
-        end
         return "sp_IntArray_length(" + rc + ")"
       end
       if mname == "[]"
@@ -20513,9 +20510,6 @@ class Compiler
  # Float array methods
     if recv_type == "float_array"
       if mname == "length"
-        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
-          return @hoisted_strlen_var
-        end
         return "sp_FloatArray_length(" + rc + ")"
       end
       if mname == "[]"
@@ -20587,9 +20581,6 @@ class Compiler
       elem_type = ptr_array_elem_type(recv_type)
       ct = c_type(elem_type)
       if mname == "length" || mname == "size"
-        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
-          return @hoisted_strlen_var
-        end
         return "sp_PtrArray_length(" + rc + ")"
       end
       if mname == "[]"
@@ -20686,15 +20677,9 @@ class Compiler
     end
     if recv_type == "str_array"
       if mname == "length"
-        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
-          return @hoisted_strlen_var
-        end
         return "sp_StrArray_length(" + rc + ")"
       end
       if mname == "size"
-        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
-          return @hoisted_strlen_var
-        end
         return "sp_StrArray_length(" + rc + ")"
       end
       if mname == "[]"
@@ -20889,9 +20874,10 @@ class Compiler
         return "sp_SymIntHash_has_key((sp_SymIntHash *)(" + rc + "), " + compile_arg0_as_sym(nid) + ")"
       end
       if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
-        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
-          return @hoisted_strlen_var
-        end
+ # Don't reuse @hoisted_strlen_var for a hash receiver -- the
+ # cache was computed via strlen() on a string and reading
+ # `h->len` field through that cache value would be junk.
+ # Issue #730.
         return "sp_SymIntHash_length((sp_SymIntHash *)(" + rc + "))"
       end
       if mname == "empty?"
@@ -21068,9 +21054,6 @@ class Compiler
         return "sp_SymStrHash_has_key((sp_SymStrHash *)(" + rc + "), " + compile_arg0_as_sym(nid) + ")"
       end
       if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
-        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
-          return @hoisted_strlen_var
-        end
         return "sp_SymStrHash_length((sp_SymStrHash *)(" + rc + "))"
       end
       if mname == "empty?"
@@ -21431,9 +21414,6 @@ class Compiler
         return "sp_StrIntHash_has_key(" + rc + ", " + compile_str_arg0(nid) + ")"
       end
       if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
-        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
-          return @hoisted_strlen_var
-        end
         return "sp_StrIntHash_length(" + rc + ")"
       end
       if mname == "empty?"
@@ -21679,9 +21659,6 @@ class Compiler
         return "sp_StrStrHash_has_key(" + rc + ", " + compile_str_arg0(nid) + ")"
       end
       if mname == "length" || mname == "size" || (mname == "count" && @nd_block[nid] < 0 && @nd_arguments[nid] < 0)
-        if @hoisted_strlen_var != "" && @hoisted_strlen_recv == rc
-          return @hoisted_strlen_var
-        end
         return "sp_StrStrHash_length(" + rc + ")"
       end
       if mname == "empty?"
