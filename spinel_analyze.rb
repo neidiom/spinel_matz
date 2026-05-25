@@ -2013,6 +2013,14 @@ class Compiler
     if t == "RangeNode"
       return "range"
     end
+    if t == "DefinedNode"
+ # `defined?(expr)` returns a tag string ("local-variable",
+ # "instance-variable", "constant", "method", "expression") or
+ # nil. spinel emits as `const char*` with NULL for the nil case;
+ # `puts` already handles a NULL string by printing an empty
+ # line, matching CRuby's `puts nil`. Issue #711.
+      return "string"
+    end
     if t == "RescueModifierNode"
  # `expr rescue fallback` — unify the types of the two branches.
  # The fallback always runs on error, so prefer its type when the
@@ -6582,7 +6590,13 @@ class Compiler
     end
     if t == "InstanceVariableWriteNode"
       register_toplevel_ivar(@nd_name[nid], infer_ivar_init_type(@nd_expression[nid]))
-    elsif t == "InstanceVariableReadNode" || t == "InstanceVariableTargetNode" || t == "InstanceVariableOperatorWriteNode" || t == "InstanceVariableAndWriteNode" || t == "InstanceVariableOrWriteNode"
+    elsif t == "InstanceVariableReadNode"
+ # Read-only at toplevel: register with type "nil" (read-only at
+ # class scope already uses "nil" via scan_ivars). The widening
+ # in register_toplevel_ivar later upgrades it to a concrete type
+ # on encountering a write. Issue #711.
+      register_toplevel_ivar(@nd_name[nid], "nil")
+    elsif t == "InstanceVariableTargetNode" || t == "InstanceVariableOperatorWriteNode" || t == "InstanceVariableAndWriteNode" || t == "InstanceVariableOrWriteNode"
       register_toplevel_ivar(@nd_name[nid], "int")
     end
     cs = []

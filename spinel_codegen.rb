@@ -13279,6 +13279,76 @@ class Compiler
       return "sp_range_new(" + left_c + ", " + right_c + ")"
     end
     if t == "DefinedNode"
+ # `defined?(expr)` resolves to a tag string ("local-variable",
+ # "instance-variable", "constant", "method", "expression") or
+ # nil (emitted as the C NULL `const char*`). Compile-time
+ # resolution covers the most common shapes; everything else
+ # falls through to "expression". Issue #711.
+      inner_d = @nd_expression[nid]
+      if inner_d < 0
+        return "((const char*)0)"
+      end
+      it_d = @nd_type[inner_d]
+      if it_d == "LocalVariableReadNode"
+ # @scope_names holds bare param/local names plus "---" frames.
+        lname_d = @nd_name[inner_d]
+        i_d = @scope_names.length - 1
+        found_d = 0
+        while i_d >= 0
+          if @scope_names[i_d] == lname_d
+            found_d = 1
+            i_d = -1
+          else
+            i_d = i_d - 1
+          end
+        end
+        if found_d == 1
+          return "\"local-variable\""
+        end
+        return "((const char*)0)"
+      end
+      if it_d == "InstanceVariableReadNode"
+ # Use the slot's recorded type: nil means scan_ivars added the
+ # slot but no write was ever observed (matches CRuby's "ivar
+ # exists but was never set" -> defined? is nil). Any other
+ # recorded type means at least one writer exists at compile
+ # time, so we treat the ivar as defined.
+        iname_d = @nd_name[inner_d]
+        defined_iv = 0
+        if @current_class_idx >= 0
+          it_d2 = cls_ivar_type(@current_class_idx, iname_d)
+          if it_d2 != "nil" && it_d2 != ""
+            defined_iv = 1
+          end
+        end
+        if defined_iv == 0 && toplevel_ivar_type(iname_d) != "" && toplevel_ivar_type(iname_d) != "nil"
+          defined_iv = 1
+        end
+        if defined_iv == 1
+          return "\"instance-variable\""
+        end
+        return "((const char*)0)"
+      end
+      if it_d == "ConstantReadNode"
+        cname_d = @nd_name[inner_d]
+        if find_const_idx(cname_d) >= 0 || find_class_idx(cname_d) >= 0 || builtin_class_id_for_name(cname_d) >= 0
+          return "\"constant\""
+        end
+        return "((const char*)0)"
+      end
+      if it_d == "CallNode" && @nd_receiver[inner_d] < 0
+        mname_d = @nd_name[inner_d]
+        if find_method_idx(mname_d) >= 0
+          return "\"method\""
+        end
+        return "((const char*)0)"
+      end
+      if it_d == "NilNode"
+        return "\"expression\""
+      end
+      if it_d == "TrueNode" || it_d == "FalseNode" || it_d == "SelfNode"
+        return "\"expression\""
+      end
       return "\"expression\""
     end
     if t == "RescueModifierNode"
