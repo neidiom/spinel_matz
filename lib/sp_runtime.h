@@ -3483,6 +3483,29 @@ sp_Bigint *sp_bigint_shl(sp_Bigint *a, int64_t n);
 sp_Bigint *sp_bigint_shr(sp_Bigint *a, int64_t n);
 sp_Bigint *sp_bigint_not(sp_Bigint *a);
 
+/* ---- Pack / Unpack (linked from sp_pack.o) ----
+   Issue #889. Implementation lives in libspinel_rt.a; the entry
+   points below call into the static GC helpers in this header
+   via the sp_ext_* shims defined just below. */
+const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt);
+const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt);
+sp_PolyArray *sp_str_unpack(const char *str, const char *fmt);
+
+/* External-TU shim wrappers. The runtime's GC-allocating helpers
+   are `static inline`; separately-compiled .c files in
+   libspinel_rt.a can't reach the per-TU state. Define plain
+   external-linkage wrappers here so the main binary's single TU
+   owns the GC state and lib code calls in via stable symbols.
+   sp_runtime.h is included exactly once per binary (in the
+   generated main file), so there's no multi-definition risk. */
+sp_PolyArray *sp_ext_poly_array_new(void) { return sp_PolyArray_new(); }
+void sp_ext_poly_array_push_int(sp_PolyArray *a, int64_t v) { sp_PolyArray_push(a, sp_box_int((mrb_int)v)); }
+void sp_ext_poly_array_push_str(sp_PolyArray *a, const char *s) { sp_PolyArray_push(a, sp_box_str(s)); }
+char *sp_ext_str_alloc(size_t n) { return sp_str_alloc(n); }
+void sp_ext_str_set_len(char *s, size_t n) { sp_str_set_len(s, n); }
+const char *sp_ext_str_empty(void) { return sp_str_empty; }
+size_t sp_ext_str_byte_len(const char *s) { return sp_str_byte_len(s); }
+
 #ifdef __APPLE__
 #pragma clang diagnostic pop
 #endif

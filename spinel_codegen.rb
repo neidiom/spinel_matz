@@ -19959,6 +19959,18 @@ class Compiler
       end
       return "sp_str_bytes(" + rc + ")"
     end
+ # Issue #889: String#unpack — returns a poly_array of boxed
+ # elements (ints for numeric specs, strings for a/A/Z).
+    if mname == "unpack"
+      args_id_up = @nd_arguments[nid]
+      if args_id_up >= 0
+        a_up = get_args(args_id_up)
+        if a_up.length >= 1
+          @needs_rb_value = 1
+          return "sp_str_unpack(" + rc + ", " + compile_expr(a_up[0]) + ")"
+        end
+      end
+    end
     if mname == "hex"
       return "((mrb_int)strtoll(" + rc + ", NULL, 16))"
     end
@@ -21240,6 +21252,14 @@ class Compiler
             return tmp
           end
         end
+ # Issue #889: general int_array#pack — non-"C*" formats route
+ # through sp_IntArray_pack (libspinel_rt.a).
+        if args_id >= 0
+          a_pk2 = get_args(args_id)
+          if a_pk2.length >= 1
+            return "sp_IntArray_pack(" + rc + ", " + compile_expr(a_pk2[0]) + ")"
+          end
+        end
       end
  # `replace(other)` in expression position: the stmt-form
  # arm in compile_*_stmt only fires when the call's value is
@@ -21868,6 +21888,16 @@ class Compiler
     if recv_type == "poly_array"
       if mname == "length" || mname == "size"
         return "sp_PolyArray_length(" + rc + ")"
+      end
+ # Issue #889: poly_array#pack via libspinel_rt.a helper.
+      if mname == "pack"
+        args_id_pkp = @nd_arguments[nid]
+        if args_id_pkp >= 0
+          a_pkp = get_args(args_id_pkp)
+          if a_pkp.length >= 1
+            return "sp_PolyArray_pack(" + rc + ", " + compile_expr(a_pkp[0]) + ")"
+          end
+        end
       end
       if mname == "[]"
         return "sp_PolyArray_get(" + rc + ", " + compile_arg0_as_int(nid) + ")"

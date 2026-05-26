@@ -4414,6 +4414,11 @@ class Compiler
     if mname == "pack"
       return "string"
     end
+ # Issue #889: String#unpack returns Array of mixed-type elements;
+ # spinel boxes through poly_array.
+    if mname == "unpack"
+      return "poly_array"
+    end
     if mname == "uniq"
       if recv >= 0
         return infer_type(recv)
