@@ -4657,7 +4657,7 @@ class Compiler
     if mname == "capitalize"
       return "string"
     end
-    if mname == "tr"
+    if mname == "tr" || mname == "tr_s"
       return "string"
     end
     if mname == "delete"

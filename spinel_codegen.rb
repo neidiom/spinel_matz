@@ -19396,12 +19396,13 @@ class Compiler
  # narrowing works the same as `s.index`. Issue #645.
       return "sp_str_rindex_opt(" + rc + ", " + compile_arg0(nid) + ")"
     end
-    if mname == "tr"
+    if mname == "tr" || mname == "tr_s"
       args_id = @nd_arguments[nid]
       if args_id >= 0
         a = get_args(args_id)
         if a.length >= 2
-          return "sp_str_tr(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
+          helper_tr = mname == "tr_s" ? "sp_str_tr_s" : "sp_str_tr"
+          return helper_tr + "(" + rc + ", " + compile_expr(a[0]) + ", " + compile_expr(a[1]) + ")"
         end
       end
       return rc
@@ -19573,7 +19574,7 @@ class Compiler
     if mname == "oct"
       return "((mrb_int)strtoll(" + rc + ", NULL, 8))"
     end
-    if mname == "tr"
+    if mname == "tr" || mname == "tr_s"
       args_id = @nd_arguments[nid]
       arg1 = "\"\""
       if args_id >= 0
@@ -19582,7 +19583,9 @@ class Compiler
           arg1 = compile_expr(a[1])
         end
       end
-      return "sp_str_tr(" + rc + ", " + compile_arg0(nid) + ", " + arg1 + ")"
+ # Issue #902: tr_s squeezes adjacent identical translated chars.
+      helper = mname == "tr_s" ? "sp_str_tr_s" : "sp_str_tr"
+      return helper + "(" + rc + ", " + compile_arg0(nid) + ", " + arg1 + ")"
     end
     if mname == "delete"
       return "sp_str_delete(" + rc + ", " + compile_arg0(nid) + ")"

@@ -1602,6 +1602,53 @@ static sp_IntArray*sp_str_bytes(const char*s){sp_IntArray*a=sp_IntArray_new();if
 static sp_IntArray*sp_str_codepoints(const char*s){sp_IntArray*a=sp_IntArray_new();if(!s)return a;const char*p=s;while(*p){uint32_t cp;int n=sp_utf8_decode(p,&cp);sp_IntArray_push(a,(mrb_int)cp);p+=n;}return a;}
 /* Issue #798: guard NULL inputs (CRuby treats nil/no-op gracefully). */
 static const char*sp_str_tr(const char*s,const char*from,const char*to){if(!s)return sp_str_empty;if(!from||!to)return s;size_t fn,tn;uint32_t*fcps=sp_utf8_decode_all(from,&fn);uint32_t*tcps=sp_utf8_decode_all(to,&tn);size_t bl=strlen(s);size_t cap=bl*4+1;char*buf=(char*)malloc(cap);size_t n=0;const char*p=s;while(*p){uint32_t cp;int cn=sp_utf8_decode(p,&cp);size_t mi=fn;for(size_t j=0;j<fn;j++)if(fcps[j]==cp){mi=j;break;}if(mi<fn&&tn>0){uint32_t rep=mi<tn?tcps[mi]:tcps[tn-1];n+=sp_utf8_encode(rep,buf+n);}else{memcpy(buf+n,p,cn);n+=cn;}p+=cn;}buf[n]=0;char*r=sp_str_alloc(n);memcpy(r,buf,n+1);free(buf);free(fcps);free(tcps);return r;}
+/* Issue #902: String#tr_s -- translate AND squeeze consecutive
+   identical results into one. Walks codepoint-by-codepoint and
+   collapses adjacent duplicates only among the translated bytes
+   (untranslated runs keep their original characters). */
+static const char*sp_str_tr_s(const char*s,const char*from,const char*to){
+  if(!s)return sp_str_empty;
+  if(!from||!to)return s;
+  size_t fn,tn;
+  uint32_t*fcps=sp_utf8_decode_all(from,&fn);
+  uint32_t*tcps=sp_utf8_decode_all(to,&tn);
+  size_t bl=strlen(s);
+  size_t cap=bl*4+1;
+  char*buf=(char*)malloc(cap);
+  size_t n=0;
+  const char*p=s;
+  uint32_t last_emit=0; int has_last=0; int last_was_translated=0;
+  while(*p){
+    uint32_t cp; int cn=sp_utf8_decode(p,&cp);
+    size_t mi=fn;
+    for(size_t j=0;j<fn;j++)if(fcps[j]==cp){mi=j;break;}
+    uint32_t emit_cp;
+    int translated=0;
+    if(mi<fn&&tn>0){
+      emit_cp=mi<tn?tcps[mi]:tcps[tn-1];
+      translated=1;
+    } else {
+      emit_cp=cp;
+      translated=0;
+    }
+    /* Squeeze only when both the previous and current emit were
+       translated, AND the emitted codepoints match. */
+    if(has_last && last_was_translated && translated && last_emit==emit_cp){
+      /* skip */
+    } else {
+      n+=sp_utf8_encode(emit_cp,buf+n);
+      last_emit=emit_cp;
+      has_last=1;
+      last_was_translated=translated;
+    }
+    p+=cn;
+  }
+  buf[n]=0;
+  char*r=sp_str_alloc(n);
+  memcpy(r,buf,n+1);
+  free(buf); free(fcps); free(tcps);
+  return r;
+}
 static const char*sp_str_delete(const char*s,const char*chars){if(!s)return sp_str_empty;if(!chars)return s;size_t setn;uint32_t*set=sp_utf8_decode_all(chars,&setn);size_t bl=strlen(s);char*r=sp_str_alloc_raw(bl+1);size_t n=0;const char*p=s;while(*p){uint32_t cp;int cn=sp_utf8_decode(p,&cp);if(!sp_utf8_set_has(set,setn,cp)){memcpy(r+n,p,cn);n+=cn;}p+=cn;}r[n]=0;free(set);return r;}
 static const char*sp_str_squeeze(const char*s){if(!s)return sp_str_empty;size_t bl=strlen(s);char*r=sp_str_alloc_raw(bl+1);size_t n=0;uint32_t prev=0xFFFFFFFFu;const char*p=s;while(*p){uint32_t cp;int cn=sp_utf8_decode(p,&cp);if(cp!=prev){memcpy(r+n,p,cn);n+=cn;prev=cp;}p+=cn;}r[n]=0;return r;}
 static const char*sp_str_ljust(const char*s,mrb_int w){if(!s)return sp_str_empty;mrb_int cl=sp_str_length(s);if(cl>=w)return s;size_t bl=strlen(s);size_t pad=(size_t)(w-cl);char*r=sp_str_alloc_raw(bl+pad+1);memcpy(r,s,bl);memset(r+bl,' ',pad);r[bl+pad]=0;return r;}
