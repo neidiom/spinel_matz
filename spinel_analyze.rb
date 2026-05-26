@@ -4296,6 +4296,13 @@ class Compiler
       return "int"
     end
     if mname == "clamp"
+ # Issue #899: clamp on string receiver returns string.
+      if recv >= 0
+        rt_clamp = infer_type(recv)
+        if rt_clamp == "string" || rt_clamp == "mutable_str"
+          return "string"
+        end
+      end
       return "int"
     end
     if mname == "itself" || mname == "tap"

@@ -18974,6 +18974,21 @@ class Compiler
     if mname == "chomp!"
       return compile_string_method_expr(nid, "chomp", rc)
     end
+ # Comparable#clamp on string. Issue #899.
+    if mname == "clamp"
+      args_id_clp = @nd_arguments[nid]
+      if args_id_clp >= 0
+        a_clp = get_args(args_id_clp)
+        if a_clp.length >= 2
+          lo = compile_expr(a_clp[0])
+          hi = compile_expr(a_clp[1])
+          tmp_clp = new_temp
+ # Single-evaluate rc/lo/hi into temps so strcmp side effects
+ # don't fire twice when the clamp branches across the if/else.
+          return "({ const char *" + tmp_clp + " = " + rc + "; const char *_lo = " + lo + "; const char *_hi = " + hi + "; strcmp(" + tmp_clp + ", _lo) < 0 ? _lo : (strcmp(" + tmp_clp + ", _hi) > 0 ? _hi : " + tmp_clp + "); })"
+        end
+      end
+    end
  # String mutating methods called on a frozen string literal (recv
  # type "string", not "mutable_str"). MRI raises FrozenError;
  # spinel string literals are always frozen. The mutable_str arm
