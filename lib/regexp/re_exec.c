@@ -144,7 +144,10 @@ add_thread(pike_state *s, re_threadlist *list,
       continue;
 
     case RE_SAVE:
-      if (!s->match_only) {
+      /* Issue #779: bounds-check the slot offset against ncap so a
+         SAVE instruction emitted for a non-existent capture group
+         doesn't write past the per-thread capture row. */
+      if (!s->match_only && inst.offset < s->ncap) {
         CAP(s, cap_slot)[inst.offset] = (int)(sp - s->str);
       }
       pc++;
