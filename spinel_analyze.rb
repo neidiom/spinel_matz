@@ -3528,6 +3528,21 @@ class Compiler
         end
       end
     end
+    if mname == "invert"
+ # Hash#invert -- swap keys and values. str_str_hash inverts to
+ # itself (same shape); other variants go to poly_poly_hash since
+ # the inverted key/value type combinations don't all have
+ # dedicated variants. Issue #738.
+      if recv >= 0
+        rt_iv = infer_type(recv)
+        if rt_iv == "str_str_hash"
+          return "str_str_hash"
+        end
+        if is_hash_type(rt_iv) == 1
+          return "poly_poly_hash"
+        end
+      end
+    end
     if mname == "values_at"
  # `arr.values_at(...)` returns an array of the same element
  # type. Issue #742.
