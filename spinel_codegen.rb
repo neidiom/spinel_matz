@@ -18975,14 +18975,17 @@ class Compiler
     if mname == "chomp"
  # chomp(nil) is a no-op in CRuby (nil arg means "no
  # separator", returning the receiver unchanged). chomp("")
- # is paragraph mode (strip trailing newlines only); the
- # no-arg / non-nil arg path strips the default separator.
- # Issue #555 case 10.
+ # is paragraph mode (strip trailing newlines only); chomp("!")
+ # strips that explicit suffix. Default form (no arg) strips
+ # \n / \r\n / \r. Issue #555 case 10, #881.
       args_id_cm = @nd_arguments[nid]
       if args_id_cm >= 0
         a_cm = get_args(args_id_cm)
-        if a_cm.length > 0 && @nd_type[a_cm[0]] == "NilNode"
-          return rc
+        if a_cm.length > 0
+          if @nd_type[a_cm[0]] == "NilNode"
+            return rc
+          end
+          return "sp_str_chomp_sep(" + rc + ", " + compile_expr(a_cm[0]) + ")"
         end
       end
       return "sp_str_chomp(" + rc + ")"

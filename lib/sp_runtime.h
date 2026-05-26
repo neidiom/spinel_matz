@@ -1334,6 +1334,26 @@ static const char*sp_gets(void){char buf[4096];if(!fgets(buf,sizeof(buf),stdin))
 static sp_StrArray*sp_readlines(void){sp_StrArray*a=sp_StrArray_new();char buf[4096];while(fgets(buf,sizeof(buf),stdin)){size_t l=strlen(buf);char*r=sp_str_alloc_raw(l+1);memcpy(r,buf,l+1);sp_StrArray_push(a,r);}return a;}
 static const char*sp_str_strip(const char*s){if(!s)return sp_str_empty;while(*s&&isspace((unsigned char)*s))s++;size_t l=strlen(s);while(l>0&&isspace((unsigned char)s[l-1]))l--;char*r=sp_str_alloc_raw(l+1);memcpy(r,s,l);r[l]=0;return r;}
 static const char*sp_str_chomp(const char*s){if(!s)return sp_str_empty;size_t l=strlen(s);while(l>0&&(s[l-1]=='\n'||s[l-1]=='\r'))l--;char*r=sp_str_alloc_raw(l+1);memcpy(r,s,l);r[l]=0;return r;}
+
+/* Issue #881: `"hello!".chomp("!")` strips the explicit separator.
+   Empty sep strips any trailing newlines (CRuby paragraph mode).
+   NULL sep is caller's responsibility (codegen routes nil to a
+   no-op before calling). */
+static const char *sp_str_chomp_sep(const char *s, const char *sep) {
+  if (!s) return sp_str_empty;
+  size_t l = strlen(s);
+  if (!sep || !*sep) {
+    /* Empty sep = strip all trailing \n / \r\n / \r repeatedly. */
+    while (l > 0 && (s[l-1] == '\n' || s[l-1] == '\r')) l--;
+  } else {
+    size_t sl = strlen(sep);
+    if (sl <= l && memcmp(s + l - sl, sep, sl) == 0) l -= sl;
+  }
+  char *r = sp_str_alloc_raw(l + 1);
+  memcpy(r, s, l);
+  r[l] = 0;
+  return r;
+}
 static const char*sp_str_chop(const char*s){if(!s)return sp_str_empty;size_t l=strlen(s);if(l>0){if(l>=2&&s[l-2]=='\r'&&s[l-1]=='\n')l-=2;else l--;}char*r=sp_str_alloc_raw(l+1);memcpy(r,s,l);r[l]=0;return r;}
 static mrb_bool sp_str_include(const char*s,const char*sub){if(!s||!sub)return FALSE;return strstr(s,sub)!=NULL;}
 static mrb_bool sp_str_start_with(const char*s,const char*p){if(!s||!p)return FALSE;return strncmp(s,p,strlen(p))==0;}
