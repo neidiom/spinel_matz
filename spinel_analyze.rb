@@ -19941,6 +19941,13 @@ class Compiler
         return new_t
       end
     end
+ # Issue #901: Time - Time → float. Pass 1 sees the rhs LV as
+ # int (not yet declared) so the `-` arm returns "time"
+ # (Time - Numeric path). Pass 2 re-infers as "float" once the
+ # rhs LV is declared as time. Accept the refinement.
+    if cur_t == "time" && new_t == "float"
+      return new_t
+    end
     ""
   end
 
