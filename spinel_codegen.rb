@@ -4604,6 +4604,12 @@ class Compiler
       if is_value_type_obj(bt_n) == 1
         return "{0}"
       end
+ # Issue #915: nullable poly / untyped lowers to sp_RbVal (a
+ # struct); the function-return-type fallback was emitting bare
+ # NULL which doesn't unify with sp_RbVal.
+      if bt_n == "poly" || bt_n == "untyped"
+        return "sp_box_nil()"
+      end
       return "NULL"
     end
  # NOTE: nullable returns above, so rest handles base types only
