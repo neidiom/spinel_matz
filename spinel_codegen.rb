@@ -22017,7 +22017,8 @@ class Compiler
             end
             return "(sp_SymIntHash_has_key(" + rc + ", " + key + ") ? sp_SymIntHash_get(" + rc + ", " + key + ") : " + defval + ")"
           end
-          return "sp_SymIntHash_get((sp_SymIntHash *)(" + rc + "), " + key + ")"
+ # Issue #914: fetch without default raises KeyError on miss.
+          return "(sp_SymIntHash_has_key(" + rc + ", " + key + ") ? sp_SymIntHash_get((sp_SymIntHash *)(" + rc + "), " + key + ") : (sp_raise_cls(\"KeyError\", \"key not found\"), (mrb_int)0))"
         end
       end
       if mname == "keys"
@@ -22207,7 +22208,8 @@ class Compiler
             defval = compile_expr(aargs[1])
             return "(sp_SymStrHash_has_key(" + rc + ", " + key + ") ? sp_SymStrHash_get(" + rc + ", " + key + ") : " + defval + ")"
           end
-          return "sp_SymStrHash_get((sp_SymStrHash *)(" + rc + "), " + key + ")"
+ # Issue #914.
+          return "(sp_SymStrHash_has_key(" + rc + ", " + key + ") ? sp_SymStrHash_get((sp_SymStrHash *)(" + rc + "), " + key + ") : (sp_raise_cls(\"KeyError\", \"key not found\"), (const char *)0))"
         end
       end
       if mname == "keys"
@@ -22381,7 +22383,8 @@ class Compiler
               defval_f = box_expr_to_poly(aargs_f[1])
               return "(sp_SymPolyHash_has_key(" + rc + ", " + key_f + ") ? sp_SymPolyHash_get(" + rc + ", " + key_f + ") : (" + defval_f + "))"
             end
-            return "sp_SymPolyHash_get(" + rc + ", " + key_f + ")"
+ # Issue #914.
+            return "(sp_SymPolyHash_has_key(" + rc + ", " + key_f + ") ? sp_SymPolyHash_get(" + rc + ", " + key_f + ") : (sp_raise_cls(\"KeyError\", \"key not found\"), sp_box_nil()))"
           end
         end
       end
@@ -22487,7 +22490,8 @@ class Compiler
               defval_f = box_expr_to_poly(aargs_f[1])
               return "(sp_StrPolyHash_has_key(" + rc + ", " + key_f + ") ? sp_StrPolyHash_get(" + rc + ", " + key_f + ") : (" + defval_f + "))"
             end
-            return "sp_StrPolyHash_get(" + rc + ", " + key_f + ")"
+ # Issue #914.
+            return "(sp_StrPolyHash_has_key(" + rc + ", " + key_f + ") ? sp_StrPolyHash_get(" + rc + ", " + key_f + ") : (sp_raise_cls(\"KeyError\", \"key not found\"), sp_box_nil()))"
           end
         end
       end
@@ -22556,7 +22560,8 @@ class Compiler
               defval_f = box_expr_to_poly(aargs_f[1])
               return "(sp_PolyPolyHash_has_key(" + rc + ", " + key_f + ") ? sp_PolyPolyHash_get(" + rc + ", " + key_f + ") : (" + defval_f + "))"
             end
-            return "sp_PolyPolyHash_get(" + rc + ", " + key_f + ")"
+ # Issue #914.
+            return "(sp_PolyPolyHash_has_key(" + rc + ", " + key_f + ") ? sp_PolyPolyHash_get(" + rc + ", " + key_f + ") : (sp_raise_cls(\"KeyError\", \"key not found\"), sp_box_nil()))"
           end
         end
       end
@@ -22633,7 +22638,8 @@ class Compiler
             end
             return "(sp_StrIntHash_has_key(" + rc + ", " + key + ") ? sp_StrIntHash_get(" + rc + ", " + key + ") : " + defval + ")"
           end
-          return "sp_StrIntHash_get(" + rc + ", " + key + ")"
+ # Issue #914.
+          return "(sp_StrIntHash_has_key(" + rc + ", " + key + ") ? sp_StrIntHash_get(" + rc + ", " + key + ") : (sp_raise_cls(\"KeyError\", \"key not found\"), (mrb_int)0))"
         end
       end
       if mname == "merge"
@@ -22796,7 +22802,8 @@ class Compiler
             defval = compile_expr(aargs[1])
             return "(sp_IntStrHash_has_key(" + rc + ", " + key + ") ? sp_IntStrHash_get(" + rc + ", " + key + ") : " + defval + ")"
           end
-          return "sp_IntStrHash_get(" + rc + ", " + key + ")"
+ # Issue #914.
+          return "(sp_IntStrHash_has_key(" + rc + ", " + key + ") ? sp_IntStrHash_get(" + rc + ", " + key + ") : (sp_raise_cls(\"KeyError\", \"key not found\"), (const char *)0))"
         end
       end
  # transform_values block form. Mirrors str_int_hash's arm: walk
@@ -22904,7 +22911,8 @@ class Compiler
             defval = compile_expr(aargs[1])
             return "(sp_StrStrHash_has_key(" + rc + ", " + key + ") ? sp_StrStrHash_get(" + rc + ", " + key + ") : " + defval + ")"
           end
-          return "sp_StrStrHash_get(" + rc + ", " + key + ")"
+ # Issue #914.
+          return "(sp_StrStrHash_has_key(" + rc + ", " + key + ") ? sp_StrStrHash_get(" + rc + ", " + key + ") : (sp_raise_cls(\"KeyError\", \"key not found\"), (const char *)0))"
         end
       end
       if mname == "dup" || mname == "clone"
