@@ -27579,6 +27579,30 @@ class Compiler
  # Already pushed via the no-recv yield branch above.
                   elsif mname == "times" || mname == "upto" || mname == "downto"
                     types.push("int")
+ # Issue #870: Float#step yields floats when recv or any step
+ # arg is float. Without the float slot, lv_x += 0.5 truncates
+ # to += 0 and loops forever.
+                  elsif mname == "step"
+                    is_float_step_sl = 0
+                    if @nd_receiver[nid] >= 0 && infer_type(@nd_receiver[nid]) == "float"
+                      is_float_step_sl = 1
+                    end
+                    args_step_sl = @nd_arguments[nid]
+                    if args_step_sl >= 0
+                      aargs_step_sl = get_args(args_step_sl)
+                      ai_sl = 0
+                      while ai_sl < aargs_step_sl.length
+                        if infer_type(aargs_step_sl[ai_sl]) == "float"
+                          is_float_step_sl = 1
+                        end
+                        ai_sl = ai_sl + 1
+                      end
+                    end
+                    if is_float_step_sl == 1
+                      types.push("float")
+                    else
+                      types.push("int")
+                    end
  # `<source>.with_index(off).<consumer> { |elem, idx| }`:
  # block param at bk=1 is the idx counter (int), not another
  # element of the source. Without this, the same elem_type-
@@ -29960,7 +29984,28 @@ class Compiler
       end
       return "int"
     end
-    if mname == "times" || mname == "upto" || mname == "downto" || mname == "step"
+ # Issue #870: Float#step yields floats. If recv or any step
+ # arg is float, the block param is float (without this the
+ # int slot truncates `+= 0.5` to `+= 0` and loops forever).
+    if mname == "step"
+      recv_step_bp = @nd_receiver[call_nid]
+      if recv_step_bp >= 0 && infer_type(recv_step_bp) == "float"
+        return "float"
+      end
+      args_step_bp = @nd_arguments[call_nid]
+      if args_step_bp >= 0
+        aargs_step_bp = get_args(args_step_bp)
+        ai_step = 0
+        while ai_step < aargs_step_bp.length
+          if infer_type(aargs_step_bp[ai_step]) == "float"
+            return "float"
+          end
+          ai_step = ai_step + 1
+        end
+      end
+      return "int"
+    end
+    if mname == "times" || mname == "upto" || mname == "downto"
       return "int"
     end
     if mname == "reduce" || mname == "inject"

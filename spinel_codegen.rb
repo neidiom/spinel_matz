@@ -33038,6 +33038,7 @@ class Compiler
       if @nd_block[nid] >= 0 && recv >= 0
         old = @in_loop
         @in_loop = 1
+        recv_t_step = infer_type(recv)
         rc = compile_expr_gc_rooted(recv)
         args_id = @nd_arguments[nid]
         limit_val = "0"
@@ -33049,6 +33050,22 @@ class Compiler
           end
           if aargs.length > 1
             step_val = compile_expr(aargs[1])
+          end
+        end
+ # Issue #870: float receiver / float step needs a mrb_float
+ # induction variable. Integer-typed `lv_x += 0.5` truncates to
+ # `+= 0` and loops forever.
+        is_float_step = 0
+        if recv_t_step == "float"
+          is_float_step = 1
+        end
+        if args_id >= 0
+          aargs_t = get_args(args_id)
+          if aargs_t.length > 0 && infer_type(aargs_t[0]) == "float"
+            is_float_step = 1
+          end
+          if aargs_t.length > 1 && infer_type(aargs_t[1]) == "float"
+            is_float_step = 1
           end
         end
         bp1 = get_block_param(nid, 0)
@@ -33063,10 +33080,16 @@ class Compiler
  # paramless `step` blocks appear in the same function.
         if synth == 1
           emit("  {")
-          emit("  mrb_int lv_" + bp1 + " = 0;")
+          if is_float_step == 1
+            emit("  mrb_float lv_" + bp1 + " = 0.0;")
+          else
+            emit("  mrb_int lv_" + bp1 + " = 0;")
+          end
         end
         bp_t_st = find_var_type(bp1)
-        if bp_t_st == "bigint"
+        if is_float_step == 1
+          emit("  for (lv_" + bp1 + " = " + rc + "; lv_" + bp1 + " <= " + limit_val + "; lv_" + bp1 + " += " + step_val + ") {")
+        elsif bp_t_st == "bigint"
           @needs_bigint = 1
           stmp_st = new_temp
           emit("  for (mrb_int " + stmp_st + " = " + rc + "; " + stmp_st + " <= " + limit_val + "; " + stmp_st + " += " + step_val + ") {")
@@ -33076,7 +33099,8 @@ class Compiler
         end
         @indent = @indent + 1
         push_scope
-        declare_var(bp1, bp_t_st == "bigint" ? "bigint" : "int")
+        bp_decl_t = is_float_step == 1 ? "float" : (bp_t_st == "bigint" ? "bigint" : "int")
+        declare_var(bp1, bp_decl_t)
         redo_label = push_redo_label
         emit_redo_label(redo_label)
         compile_stmts_body(@nd_body[@nd_block[nid]])
