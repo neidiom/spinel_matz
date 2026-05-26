@@ -811,30 +811,40 @@ compile_alt(re_compiler *c)
      insert a SPLIT before it by shifting code. */
 
   /* Collect all alternatives, then emit SPLIT chain at the end.
-     This avoids insert_inst offset corruption for multi-way alternation. */
-  uint32_t alt_starts[64];  /* start positions of each alternative */
-  int num_alts = 0;
+     This avoids insert_inst offset corruption for multi-way alternation.
+     alt_starts grows dynamically; the only ceiling is the offset field's
+     uint16_t width (~65535), enforced later when the SPLIT chain is
+     wired up. Issue #777. */
+  uint32_t alt_cap = 64;
+  uint32_t *alt_starts = (uint32_t *)malloc(sizeof(uint32_t) * alt_cap);
+  if (!alt_starts) compile_error(c, "out of memory");
+  uint32_t num_alts = 0;
   alt_starts[num_alts++] = alt_start;
 
   while (peek(c) == '|') {
     next_char(c);
     emit(c, RE_JMP, 0, 0);  /* placeholder: jump to end */
+    if (num_alts >= alt_cap) {
+      alt_cap *= 2;
+      uint32_t *grown = (uint32_t *)realloc(alt_starts, sizeof(uint32_t) * alt_cap);
+      if (!grown) { free(alt_starts); compile_error(c, "out of memory"); }
+      alt_starts = grown;
+    }
     alt_starts[num_alts++] = c->code_len;
-    if (num_alts >= 64) compile_error(c, "too many alternatives");
     compile_seq(c);
   }
 
-  if (num_alts <= 1) return;  /* shouldn't happen, but safety */
+  if (num_alts <= 1) { free(alt_starts); return; }
 
   /* Now insert SPLIT chain before the alternatives.
      For n alternatives: n-1 SPLIT instructions, each pointing to
      their respective alternative. */
-  uint32_t split_count = (uint32_t)(num_alts - 1);
+  uint32_t split_count = num_alts - 1;
   /* Insert split_count instructions at alt_starts[0] */
   for (uint32_t i = 0; i < split_count; i++) {
     insert_inst(c, alt_starts[0], RE_JMP, 0, 0);  /* placeholder */
     /* adjust all alt_starts by +1 due to insertion */
-    for (int j = 0; j < num_alts; j++) {
+    for (uint32_t j = 0; j < num_alts; j++) {
       alt_starts[j]++;
     }
   }
@@ -842,18 +852,28 @@ compile_alt(re_compiler *c)
   /* Now set up SPLIT chain: each SPLIT tries next instruction or jumps to alt */
   for (uint32_t i = 0; i < split_count; i++) {
     uint32_t pos = alt_starts[0] - split_count + i;
+    uint32_t target = alt_starts[i + 1];
+    if (target > 0xFFFF) {
+      free(alt_starts);
+      compile_error(c, "regex too large (alternation offset overflow)");
+    }
     c->code[pos].op = RE_SPLIT;
     c->code[pos].a = 0;
-    c->code[pos].offset = (uint16_t)alt_starts[i + 1];
+    c->code[pos].offset = (uint16_t)target;
   }
 
   /* Patch JMPs (they are right before each alt_starts[1..n-1]) to point to end */
   uint32_t end = c->code_len;
-  for (int i = 1; i < num_alts; i++) {
+  if (end > 0xFFFF) {
+    free(alt_starts);
+    compile_error(c, "regex too large (end offset overflow)");
+  }
+  for (uint32_t i = 1; i < num_alts; i++) {
     uint32_t jmp_pos = alt_starts[i] - 1;
     c->code[jmp_pos].op = RE_JMP;
     c->code[jmp_pos].offset = (uint16_t)end;
   }
+  free(alt_starts);
 }
 
 /*
