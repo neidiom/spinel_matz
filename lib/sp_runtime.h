@@ -1930,6 +1930,17 @@ static mrb_bool sp_re_match_p(mrb_regexp_pattern *pat, const char *str) {
   return re_exec(pat, str, slen, 0, caps, 2) > 0;
 }
 
+/* Issue #869: Regexp#match?(str, pos) starts matching at byte
+   offset `pos`. Negative pos counts from the end (CRuby compat).
+   Out-of-range pos returns false. */
+static mrb_bool sp_re_match_p_at(mrb_regexp_pattern *pat, const char *str, mrb_int pos) {
+  int64_t slen = (int64_t)strlen(str);
+  if (pos < 0) pos += slen;
+  if (pos < 0 || pos > slen) return FALSE;
+  int caps[2];
+  return re_exec(pat, str, slen, (mrb_int)pos, caps, 2) > 0;
+}
+
 static const char *sp_re_gsub(mrb_regexp_pattern *pat, const char *str, const char *rep) {
   int64_t slen = (int64_t)strlen(str); size_t rlen = strlen(rep);
   size_t cap = slen * 2 + 64; char *out = sp_str_alloc_raw(cap); size_t olen = 0;

@@ -15633,6 +15633,12 @@ class Compiler
           if arg_ids.length > 0
             sc = compile_expr(arg_ids[0])
             if mname == "match?"
+ # Issue #869: 2-arg form starts matching at the given byte
+ # offset (negative counts from the end). Without the _at
+ # helper the position was silently dropped.
+              if arg_ids.length >= 2
+                return "sp_re_match_p_at(" + rpat + ", " + sc + ", " + compile_expr_as_int(arg_ids[1]) + ")"
+              end
               return "sp_re_match_p(" + rpat + ", " + sc + ")"
             end
             if mname == "=~"
