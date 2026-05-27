@@ -36419,6 +36419,47 @@ class Compiler
            ", sp_SymIntHash_get(" + tt + ", " + ti + ") " + op + " (" + val + ")); }")
       return
     end
+ # sym_str_hash / str_str_hash with `+= str` — string concat
+ # (the only sensible compound op for string-valued hashes).
+    if rt == "sym_str_hash" && op == "+"
+      tt = new_temp
+      ti = new_temp
+      emit("  { sp_SymStrHash *" + tt + " = " + rc + "; sp_sym " + ti + " = " + idx +
+           "; sp_SymStrHash_set(" + tt + ", " + ti +
+           ", sp_str_concat(sp_SymStrHash_get(" + tt + ", " + ti + "), " + val + ")); }")
+      return
+    end
+    if rt == "str_str_hash" && op == "+"
+      tt = new_temp
+      ti = new_temp
+      idx_s2 = compile_expr_as_string(arg_ids[0])
+      emit("  { sp_StrStrHash *" + tt + " = " + rc + "; const char *" + ti + " = " + idx_s2 +
+           "; sp_StrStrHash_set(" + tt + ", " + ti +
+           ", sp_str_concat(sp_StrStrHash_get(" + tt + ", " + ti + "), " + val + ")); }")
+      return
+    end
+ # sym_poly_hash / str_poly_hash with `+= int` — unbox the
+ # current sp_RbVal, run the op, re-box. Only int-valued slots
+ # are supported here; other op-arg shapes fall through.
+    if rt == "sym_poly_hash" && op == "+" && infer_type(@nd_expression[nid]) == "int"
+      @needs_rb_value = 1
+      tt = new_temp
+      ti = new_temp
+      emit("  { sp_SymPolyHash *" + tt + " = " + rc + "; sp_sym " + ti + " = " + idx +
+           "; sp_SymPolyHash_set(" + tt + ", " + ti +
+           ", sp_box_int(sp_SymPolyHash_get(" + tt + ", " + ti + ").v.i " + op + " (" + val + "))); }")
+      return
+    end
+    if rt == "str_poly_hash" && op == "+" && infer_type(@nd_expression[nid]) == "int"
+      @needs_rb_value = 1
+      tt = new_temp
+      ti = new_temp
+      idx_s3 = compile_expr_as_string(arg_ids[0])
+      emit("  { sp_StrPolyHash *" + tt + " = " + rc + "; const char *" + ti + " = " + idx_s3 +
+           "; sp_StrPolyHash_set(" + tt + ", " + ti +
+           ", sp_box_int(sp_StrPolyHash_get(" + tt + ", " + ti + ").v.i " + op + " (" + val + "))); }")
+      return
+    end
  # Poly recv + symbol idx: surfaces in `arr[i][:k] += v` (and the
  # each-block analog `f[:k] += v` where f is destructured from a
  # poly_array of boxed hashes — block param type is widened to
