@@ -1746,6 +1746,52 @@ static const char*sp_str_delete(const char*s,const char*chars){if(!s)return sp_s
    `bytes` / `length` consult the header (not strlen), so callers
    would see the alloc size and trailing NULs. */
 static const char*sp_str_squeeze(const char*s){if(!s)return sp_str_empty;size_t bl=strlen(s);char*r=sp_str_alloc_raw(bl+1);size_t n=0;uint32_t prev=0xFFFFFFFFu;const char*p=s;while(*p){uint32_t cp;int cn=sp_utf8_decode(p,&cp);if(cp!=prev){memcpy(r+n,p,cn);n+=cn;prev=cp;}p+=cn;}r[n]=0;sp_str_set_len(r,n);return r;}
+
+/* String#scrub — walk the bytes; for each valid UTF-8 lead +
+   continuation sequence, copy through. For invalid bytes (lone
+   continuation, truncated multi-byte, overlong, etc.), emit the
+   replacement string and skip one byte. NULL replacement uses
+   U+FFFD (3 UTF-8 bytes: EF BF BD), matching CRuby. */
+static const char *sp_str_scrub(const char *s, const char *repl) {
+  if (!s) return sp_str_empty;
+  static const char fffd[] = "\xEF\xBF\xBD";
+  const char *r = repl ? repl : fffd;
+  size_t rlen = strlen(r);
+  size_t bl = sp_str_byte_len(s);
+  size_t cap = bl + 64;
+  char *out = sp_str_alloc_raw(cap);
+  size_t olen = 0;
+  size_t i = 0;
+  while (i < bl) {
+    unsigned char c = (unsigned char)s[i];
+    int expected = sp_utf8_char_len(c);
+    int valid = 1;
+    if (expected == 1) {
+      if (c >= 0x80) valid = 0;
+    } else {
+      if (i + (size_t)expected > bl) valid = 0;
+      else {
+        for (int k = 1; k < expected; k++) {
+          if (((unsigned char)s[i + k] & 0xC0) != 0x80) { valid = 0; break; }
+        }
+      }
+    }
+    if (valid) {
+      if (olen + (size_t)expected + 1 >= cap) { cap = (olen + expected) * 2 + 64; out = (char*)realloc(out, cap); }
+      memcpy(out + olen, s + i, (size_t)expected);
+      olen += (size_t)expected;
+      i += (size_t)expected;
+    } else {
+      if (olen + rlen + 1 >= cap) { cap = (olen + rlen) * 2 + 64; out = (char*)realloc(out, cap); }
+      memcpy(out + olen, r, rlen);
+      olen += rlen;
+      i += 1;
+    }
+  }
+  out[olen] = 0;
+  sp_str_set_len(out, olen);
+  return out;
+}
 static const char*sp_str_ljust(const char*s,mrb_int w){if(!s)return sp_str_empty;mrb_int cl=sp_str_length(s);if(cl>=w)return s;size_t bl=strlen(s);size_t pad=(size_t)(w-cl);char*r=sp_str_alloc_raw(bl+pad+1);memcpy(r,s,bl);memset(r+bl,' ',pad);r[bl+pad]=0;return r;}
 static const char*sp_str_rjust(const char*s,mrb_int w){if(!s)return sp_str_empty;mrb_int cl=sp_str_length(s);if(cl>=w)return s;size_t bl=strlen(s);size_t pad=(size_t)(w-cl);char*r=sp_str_alloc_raw(bl+pad+1);memset(r,' ',pad);memcpy(r+pad,s,bl);r[bl+pad]=0;return r;}
 static const char*sp_str_center(const char*s,mrb_int w){if(!s)return sp_str_empty;mrb_int cl=sp_str_length(s);if(cl>=w)return s;size_t bl=strlen(s);mrb_int pad=w-cl;mrb_int left=pad/2;mrb_int right=pad-left;char*r=sp_str_alloc_raw(bl+pad+1);memset(r,' ',left);memcpy(r+left,s,bl);memset(r+left+bl,' ',right);r[bl+pad]=0;return r;}

@@ -20179,6 +20179,18 @@ class Compiler
     if mname == "delete"
       return "sp_str_delete(" + rc + ", " + compile_arg0(nid) + ")"
     end
+    if mname == "scrub"
+ # 1-arg: replacement string. 0-arg: NULL (helper falls back to U+FFFD).
+      args_id_sc = @nd_arguments[nid]
+      rep_sc = "NULL"
+      if args_id_sc >= 0
+        a_sc = get_args(args_id_sc)
+        if a_sc.length > 0
+          rep_sc = compile_expr(a_sc[0])
+        end
+      end
+      return "sp_str_scrub(" + rc + ", " + rep_sc + ")"
+    end
     if mname == "squeeze"
       return "sp_str_squeeze(" + rc + ")"
     end
