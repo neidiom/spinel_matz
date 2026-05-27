@@ -12511,6 +12511,9 @@ class Compiler
     if is_nullable_type(t) == 1
       return "dynamic"
     end
+    if type_is_pointer(t) == 1
+      return "dynamic"
+    end
     "truthy"
   end
 
