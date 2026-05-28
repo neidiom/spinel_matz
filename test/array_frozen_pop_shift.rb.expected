@@ -1,0 +1,3 @@
+pop: can't modify frozen Array
+shift: can't modify frozen Array
+str_pop: can't modify frozen Array
