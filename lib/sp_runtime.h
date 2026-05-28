@@ -1069,7 +1069,7 @@ static inline mrb_int sp_IntArray_pop(sp_IntArray*a){if(!a||a->len<=0)return SP_
 static inline mrb_int sp_IntArray_shift(sp_IntArray*a){if(!a||a->len<=0)return SP_INT_NIL;if(a->frozen){sp_raise_frozen_array();return SP_INT_NIL;}mrb_int v=a->data[a->start];a->start++;a->len--;return v;}
 static inline mrb_int sp_IntArray_length(sp_IntArray*a){return a->len;}
 static inline mrb_bool sp_IntArray_empty(sp_IntArray*a){return a->len==0;}
-static inline mrb_int sp_IntArray_get(sp_IntArray*a,mrb_int i){if(i<0)i+=a->len;return a->data[a->start+i];}
+static inline mrb_int sp_IntArray_get(sp_IntArray*a,mrb_int i){if(i<0)i+=a->len;if(i<0||i>=a->len)return SP_INT_NIL;return a->data[a->start+i];}
 /* Issue #769: a very-negative i (e.g. `a[-999] = 42` on a 3-elt
    array) leaves i negative after the `i += a->len` adjustment.
    CRuby raises IndexError; spinel no-ops as the safest fallback
@@ -1141,7 +1141,7 @@ static inline mrb_float sp_FloatArray_pop(sp_FloatArray*a){if(!a||a->len<=0)retu
 static inline mrb_float sp_FloatArray_shift(sp_FloatArray*a){if(a->len==0)return 0.0;mrb_float v=a->data[0];for(mrb_int i=0;i+1<a->len;i++)a->data[i]=a->data[i+1];a->len--;return v;}
 static inline mrb_int sp_FloatArray_length(sp_FloatArray*a){return a->len;}
 static inline mrb_bool sp_FloatArray_empty(sp_FloatArray*a){return a->len==0;}
-static inline mrb_float sp_FloatArray_get(sp_FloatArray*a,mrb_int i){if(i<0)i+=a->len;return a->data[i];}
+static inline mrb_float sp_FloatArray_get(sp_FloatArray*a,mrb_int i){if(i<0)i+=a->len;if(i<0||i>=a->len)return 0.0;return a->data[i];}
 /* a[start, len] / a[start..end] for FloatArray. Same negative-start
  * and length-clamping semantics as sp_IntArray_slice. */
 static sp_FloatArray*sp_FloatArray_slice(sp_FloatArray*a,mrb_int start,mrb_int len){if(start<0)start+=a->len;if(start<0)start=0;sp_FloatArray*b=sp_FloatArray_new();if(start>=a->len||len<=0)return b;if(start+len>a->len)len=a->len-start;if(len>b->cap){sp_gc_hdr*h=(sp_gc_hdr*)((char*)b-sizeof(sp_gc_hdr));sp_gc_bytes-=sizeof(mrb_float)*b->cap;h->size-=sizeof(mrb_float)*b->cap;b->cap=len;b->data=(mrb_float*)realloc(b->data,sizeof(mrb_float)*b->cap);h->size+=sizeof(mrb_float)*b->cap;sp_gc_bytes+=sizeof(mrb_float)*b->cap;}memcpy(b->data,a->data+start,sizeof(mrb_float)*len);b->len=len;return b;}
@@ -1217,7 +1217,7 @@ static void sp_StrArray_replace(sp_StrArray*dst,sp_StrArray*src){dst->len=0;if(s
 static const char*sp_StrArray_pop(sp_StrArray*a){if(!a||a->len<=0)return NULL;return a->data[--a->len];}
 static inline mrb_int sp_StrArray_length(sp_StrArray*a){return a->len;}
 static inline mrb_bool sp_StrArray_empty(sp_StrArray*a){return a->len==0;}
-static inline const char*sp_StrArray_get(sp_StrArray*a,mrb_int i){if(i<0)i+=a->len;return a->data[i];}
+static inline const char*sp_StrArray_get(sp_StrArray*a,mrb_int i){if(i<0)i+=a->len;if(i<0||i>=a->len)return NULL;return a->data[i];}
 /* a[start, len] / a[start..end] for StrArray. Same negative-start and
  * length-clamping semantics as sp_IntArray_slice. Out-of-bounds start
  * returns an empty StrArray (we don't have a nullable form). */
@@ -2763,7 +2763,7 @@ static sp_RbVal sp_poly_shl(sp_RbVal a, sp_RbVal b) {
   return sp_box_int(sp_poly_to_i(a) << sp_poly_to_i(b));
 }
 static mrb_int sp_PolyArray_length(sp_PolyArray *a) { if (!a) return 0; return a->len; }
-static sp_RbVal sp_PolyArray_get(sp_PolyArray *a, mrb_int i) { if (!a) return sp_box_nil(); if (i < 0) i += a->len; return a->data[i]; }
+static sp_RbVal sp_PolyArray_get(sp_PolyArray *a, mrb_int i) { if (!a) return sp_box_nil(); if (i < 0) i += a->len; if (i < 0 || i >= a->len) return sp_box_nil(); return a->data[i]; }
 /* Issues #770, #789: NULL + bounds guard. Out-of-range set no-ops. */
 static void sp_PolyArray_set(sp_PolyArray *a, mrb_int i, sp_RbVal v) { if (!a) return; if (a->frozen) { sp_raise_frozen_array(); return; } mrb_int orig=i; if (i < 0) i += a->len; if (i < 0) sp_raise_cls("IndexError", sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)-a->len)); if (i >= a->len) return; a->data[i] = v; }
 static sp_PolyArray *sp_PolyArray_slice(sp_PolyArray *a, mrb_int start, mrb_int len) { if (start < 0) start += a->len; if (start < 0) start = 0; sp_PolyArray *b = sp_PolyArray_new(); if (start >= a->len || len <= 0) return b; if (start + len > a->len) len = a->len - start; for (mrb_int i = 0; i < len; i++) sp_PolyArray_push(b, a->data[start + i]); return b; }
