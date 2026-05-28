@@ -5322,9 +5322,13 @@ class Compiler
     end
     if mname == "invert"
  # Hash#invert -- fallback; normally handled in infer_operator_type.
+ # Mirror that handler exactly: only str_str_hash inverts to itself
+ # (str=>str stays str=>str); every other variant goes to
+ # poly_poly_hash. int_str_hash (int=>str) inverts to str=>int, which
+ # is NOT str_str_hash, so it must fall through to poly_poly_hash.
       if recv >= 0
         rt_inv = infer_type(recv)
-        if rt_inv == "str_str_hash" || rt_inv == "int_str_hash"
+        if rt_inv == "str_str_hash"
           return "str_str_hash"
         end
         if is_hash_type(rt_inv) == 1
