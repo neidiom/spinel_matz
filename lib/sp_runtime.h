@@ -3726,6 +3726,30 @@ static sp_Val *sp_lam_call4(sp_Val *f, sp_Val *a, sp_Val *b, sp_Val *c, sp_Val *
    The codegen swaps operands for `>>`. */
 static sp_Val *sp_lam_compose_fn(sp_Val *self, sp_Val *arg) { return sp_lam_call(self->captures[0], sp_lam_call(self->captures[1], arg)); }
 static sp_Val *sp_lam_compose(sp_Val *outer, sp_Val *inner) { sp_Val *v = sp_lam_proc(sp_lam_compose_fn, 2); v->captures[0] = outer; v->captures[1] = inner; return v; }
+/* Proc#curry over the sp_Val * representation. The curried value is a
+   proc whose captures are [target, arity, arg0, arg1, ...]; applying
+   one more arg either returns a fresh curried proc (still short of
+   arity) or invokes the target with the full argument list. Each `[]`
+   application supplies a single argument. */
+static sp_Val *sp_lam_curry_fn(sp_Val *self, sp_Val *arg) {
+  sp_Val *target = self->captures[0];
+  mrb_int arity = self->captures[1]->u.ival;
+  int have = self->u.proc.ncaptures - 2;
+  if (have + 1 < arity) {
+    sp_Val *v = sp_lam_proc(sp_lam_curry_fn, self->u.proc.ncaptures + 1);
+    v->captures[0] = target;
+    v->captures[1] = self->captures[1];
+    for (int i = 0; i < have; i++) v->captures[2 + i] = self->captures[2 + i];
+    v->captures[2 + have] = arg;
+    return v;
+  }
+  if (arity == 1) return sp_lam_call(target, arg);
+  if (arity == 2) return sp_lam_call2(target, self->captures[2], arg);
+  if (arity == 3) return sp_lam_call3(target, self->captures[2], self->captures[3], arg);
+  if (arity == 4) return sp_lam_call4(target, self->captures[2], self->captures[3], self->captures[4], arg);
+  return &sp_lam_nil_val;
+}
+static sp_Val *sp_lam_curry(sp_Val *f, mrb_int arity) { sp_Val *v = sp_lam_proc(sp_lam_curry_fn, 2); v->captures[0] = f; v->captures[1] = sp_lam_int(arity); return v; }
 static mrb_int sp_lam_to_int(sp_Val *v) { return v->u.ival; }
 
 /* ---- Fiber runtime (ucontext) ---- */

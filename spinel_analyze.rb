@@ -3356,6 +3356,20 @@ class Compiler
       return r
     end
 
+ # Proc#curry yields a curried proc (sp_Val *). Applying it via
+ # []/call gives another curried value or the final result; the whole
+ # chain stays typed "curried" since static arity tracking that would
+ # let us pinpoint the final application lives only in codegen.
+    if mname == "curry" && recv >= 0
+      rt_cur = infer_type(recv)
+      if rt_cur == "lambda" || rt_cur == "curried"
+        return "curried"
+      end
+    end
+    if (mname == "call" || mname == "[]") && recv >= 0 && infer_type(recv) == "curried"
+      return "curried"
+    end
+
  # Lambda call return type
     if mname == "call" || mname == "[]"
       if recv >= 0

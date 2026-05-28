@@ -566,6 +566,8 @@ class Compiler
     @lambda_capture_cell_types = "".split(",", -1)
     @lambda_var_ret_names = "".split(",", -1)
     @lambda_var_ret_types = "".split(",", -1)
+    @lambda_var_arity_names = "".split(",", -1)
+    @lambda_var_arity_vals = "".split(",", -1)
     @last_lambda_ret_type = ""
  # `Klass.method(:cls_meth)` generates an adapter trampoline so the
  # Method object's `(void *self, mrb_int...)` ABI fits a class
@@ -3025,6 +3027,22 @@ class Compiler
         end
       end
     end
+ # Curried proc chain (Proc#curry). The cache may carry a stale
+ # "int"/"lambda" from analyze's lambda-call arm; the receiver's
+ # type is authoritative here, so resolve before honouring the cache.
+    if @nd_type[nid] == "CallNode"
+      mn_cur_it = @nd_name[nid]
+      rc_cur_it = @nd_receiver[nid]
+      if mn_cur_it == "curry" && rc_cur_it >= 0
+        rtc_it = infer_type(rc_cur_it)
+        if rtc_it == "lambda" || rtc_it == "curried"
+          return "curried"
+        end
+      end
+      if (mn_cur_it == "[]" || mn_cur_it == "call") && rc_cur_it >= 0 && infer_type(rc_cur_it) == "curried"
+        return "curried"
+      end
+    end
  # Cache lookup. analyze.rb's annotate_all_node_types fills
  # @nd_inferred_type for every reachable node OUTSIDE block bodies
  # (block-iteration scope is iterator-specific and dispatched at
@@ -4776,6 +4794,9 @@ class Compiler
       return "sp_PolyArray *"
     end
     if t == "lambda"
+      return "sp_Val *"
+    end
+    if t == "curried"
       return "sp_Val *"
     end
     if is_obj_type(t) == 1
@@ -16644,9 +16665,38 @@ class Compiler
  # Lambda calls
     rt = infer_type(recv)
     if rt == "lambda"
+      if mname == "curry"
+        ar_cur = -1
+        if @nd_type[recv] == "LocalVariableReadNode"
+          ar_cur = lambda_var_arity(@nd_name[recv])
+        elsif @nd_type[recv] == "LambdaNode"
+          ar_cur = lambda_node_arity(recv)
+        end
+        if ar_cur > 0
+          return "sp_lam_curry(" + compile_expr(recv) + ", " + ar_cur.to_s + ")"
+        end
+      end
       r = compile_lambda_call_expr(nid, mname, recv)
       if r != ""
         return r
+      end
+    end
+ # Curried proc (from Proc#curry): each `[]`/`call` supplies one
+ # argument and yields another curried value (or the final result)
+ # as an sp_Val *, never unboxed -- the runtime tag carries whether
+ # it is a partial proc or the materialised value.
+    if rt == "curried"
+      if mname == "[]" || mname == "call"
+        args_id_cur = @nd_arguments[nid]
+        if args_id_cur >= 0
+          a_cur = get_args(args_id_cur)
+          if a_cur.length >= 1
+            return "sp_lam_call(" + compile_expr(recv) + ", " + wrap_as_sp_val(a_cur[0]) + ")"
+          end
+        end
+      end
+      if mname == "curry"
+        return compile_expr(recv)
       end
     end
 
@@ -37130,6 +37180,10 @@ class Compiler
       vn = @nd_name[nid]
       expr = @nd_expression[nid]
       if expr >= 0 && @nd_type[expr] == "LambdaNode"
+        if not_in(vn, @lambda_var_arity_names) == 1
+          @lambda_var_arity_names.push(vn)
+          @lambda_var_arity_vals.push(lambda_node_arity(expr).to_s)
+        end
         lbody = @nd_body[expr]
         if lbody >= 0
           lbs = get_stmts(lbody)
@@ -37174,6 +37228,28 @@ class Compiler
       i = i + 1
     end
     ""
+  end
+
+ # Required-parameter count of a LambdaNode -- the arity used to size
+ # a `Proc#curry`. Optional / rest params are not modelled here.
+  def lambda_node_arity(lnid)
+    pid = @nd_parameters[lnid]
+    if pid < 0
+      return 0
+    end
+    parse_id_list(@nd_requireds[pid]).length
+  end
+
+ # Arity recorded for a lambda local (-1 when unknown).
+  def lambda_var_arity(vname)
+    i = 0
+    while i < @lambda_var_arity_names.length
+      if @lambda_var_arity_names[i] == vname
+        return @lambda_var_arity_vals[i].to_i
+      end
+      i = i + 1
+    end
+    -1
   end
 
   def lam_box(expr, vtype)
@@ -39443,6 +39519,11 @@ class Compiler
       emit("  { const char *_fs = sp_float_to_s(" + val + "); fputs(_fs, stdout); putchar('" + bsl_n + "'); }")
       return
     end
+    if at == "curried"
+ # A fully-applied curried proc materialises to its (int) result.
+      emit("  printf(\"%lld" + bsl_n + "\", (long long)sp_lam_to_int(" + val + "));")
+      return
+    end
     if at == "bool"
       emit("  puts(" + val + " ? \"true\" : \"false\");")
       return
@@ -39599,6 +39680,12 @@ class Compiler
       end
       if at == "time"
         emit("  { const char *_ts = sp_time_inspect_v(" + val + "); fputs(_ts, stdout); putchar('" + bsl_n + "'); }")
+        k = k + 1
+        next
+      end
+      if at == "curried"
+ # A fully-applied curried proc materialises to its (int) result.
+        emit("  printf(\"%lld" + bsl_n + "\", (long long)sp_lam_to_int(" + val + "));")
         k = k + 1
         next
       end
