@@ -43043,10 +43043,18 @@ class Compiler
  # so the cls_id chain stays tagged for `arr[i][j][k]...`.
         ret_is_arr2 = (block_ret == "int_array" || block_ret == "float_array" || block_ret == "str_array" || block_ret == "sym_array")
         ret_is_deep_arr2 = (is_ptr_array_type(block_ret) == 1 || block_ret == "poly_array")
+ # Block returns a heap user object (`arr.map { Obj.new }`): collect
+ # into a PtrArray of the object pointers (analyze types the result
+ # `obj_<C>_ptr_array`). Without this the accumulator defaulted to
+ # IntArray and the sp_<C>* push failed to compile. Value-type
+ # classes are excluded -- their constructor returns a struct by
+ # value, not a pointer, so they need value-type-collection support
+ # (separate work); they fall through unchanged.
+        ret_is_obj2 = (is_obj_type(block_ret) == 1 && is_value_type_class(block_ret[4, block_ret.length - 4]) == 0)
         if ret_is_deep_arr2
           @needs_rb_value = 1
           emit("  sp_PolyArray *" + tmp_arr + " = sp_PolyArray_new();")
-        elsif ret_is_arr2
+        elsif ret_is_arr2 || ret_is_obj2
           @needs_ptr_array = 1
           emit("  sp_PtrArray *" + tmp_arr + " = sp_PtrArray_new();")
         else
@@ -43088,13 +43096,13 @@ class Compiler
               else
                 emit("  sp_PolyArray_push(" + tmp_arr + ", " + box_value_to_poly(block_ret, val) + ");")
               end
-            elsif ret_is_arr2
+            elsif ret_is_arr2 || ret_is_obj2
               emit("  sp_PtrArray_push(" + tmp_arr + ", (void *)(" + val + "));")
             else
               emit("  sp_IntArray_push(" + tmp_arr + ", " + val + ");")
             end
           else
-            emit_map_default_push(tmp_arr, ret_is_arr2 ? "ptr_array" : "int_array")
+            emit_map_default_push(tmp_arr, (ret_is_arr2 || ret_is_obj2) ? "ptr_array" : "int_array")
           end
         end
         @indent = @indent - 1
