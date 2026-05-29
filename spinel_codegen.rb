@@ -9690,6 +9690,19 @@ class Compiler
     end
   end
 
+ # Membership test for a ";a;b;c;" delimited name list.
+  def name_in_semic_list(list, name)
+    parts = list.split(";", -1)
+    k = 0
+    while k < parts.length
+      if parts[k] == name
+        return 1
+      end
+      k = k + 1
+    end
+    0
+  end
+
   def ivar_in_chain(ci, iname)
     names = @cls_ivar_names[ci].split(";", -1)
     k = 0
@@ -9951,16 +9964,21 @@ class Compiler
         emit_raw("  sp_" + cname + " *self = (sp_" + cname + " *)p;")
         names = @cls_ivar_names[i].split(";", -1)
         types = @cls_ivar_types[i].split(";", -1)
+ # Track names already marked so the ancestor walk below
+ # doesn't double-mark an ivar (which could re-emit it under
+ # a widened child type). Seeded with the names actually
+ # marked in this class's own pass.
+        marked = ";"
         j = 0
         while j < names.length
           if j < types.length
- # Skip ivars inherited from parent — emit_class_struct
+ # Skip ivars inherited from an ancestor — emit_class_struct
  # also skips them on the child, so the struct field type
- # comes from the parent's recorded type, and re-emitting
+ # comes from the ancestor's recorded type, and re-emitting
  # here under the child's type info can produce a wrong
  # mark (e.g. parent says int_array, child has widened to
- # poly, struct field is sp_RbVal). The parent walk below
- # marks them via the parent's type.
+ # poly, struct field is sp_RbVal). The ancestor walk below
+ # marks them via the introducing class's type.
             skip_inherited = 0
             if @cls_parents[i] != ""
               parent_idx = find_class_idx(@cls_parents[i])
@@ -9972,26 +9990,38 @@ class Compiler
             end
             if skip_inherited == 0 && ivar_needs_gc_mark(types[j]) == 1
               emit_gc_mark_ivar("self->" + sanitize_ivar(names[j]), types[j])
+              marked = marked + names[j] + ";"
             end
           end
           j = j + 1
         end
- # Also scan parent fields
-        if @cls_parents[i] != ""
-          pi = find_class_idx(@cls_parents[i])
-          if pi >= 0
-            pnames = @cls_ivar_names[pi].split(";", -1)
-            ptypes = @cls_ivar_types[pi].split(";", -1)
-            pj = 0
-            while pj < pnames.length
-              if pj < ptypes.length
-                if ivar_needs_gc_mark(ptypes[pj]) == 1
+ # Scan ancestor fields, walking the FULL chain rather than
+ # just the immediate parent. A passthrough middle class
+ # (one introducing no ivars of its own) would otherwise
+ # break the chain and drop ivars introduced two-or-more
+ # levels up, leaving them unmarked → use-after-free.
+        anc = @cls_parents[i]
+        while anc != ""
+          pi = find_class_idx(anc)
+          if pi < 0
+            anc = ""
+            next
+          end
+          pnames = @cls_ivar_names[pi].split(";", -1)
+          ptypes = @cls_ivar_types[pi].split(";", -1)
+          pj = 0
+          while pj < pnames.length
+            if pj < ptypes.length
+              if ivar_needs_gc_mark(ptypes[pj]) == 1
+                if name_in_semic_list(marked, pnames[pj]) == 0
                   emit_gc_mark_ivar("self->" + sanitize_ivar(pnames[pj]), ptypes[pj])
+                  marked = marked + pnames[pj] + ";"
                 end
               end
-              pj = pj + 1
             end
+            pj = pj + 1
           end
+          anc = @cls_parents[pi]
         end
         emit_raw("}")
         emit_raw("")
