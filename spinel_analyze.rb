@@ -2459,6 +2459,15 @@ class Compiler
  # class constant in value position.
           return "class"
         end
+ # nested module constant in value position (`Outer::Inner`
+ # where Inner is a module) — same sp_Class representation as
+ # the ConstantReadNode case above.
+        if module_name_exists(cpname) == 1
+          return "class"
+        end
+        if is_builtin_class_const_name(cpname) == 1
+          return "class"
+        end
       end
       parent = @nd_receiver[nid]
       if parent >= 0
@@ -4432,6 +4441,11 @@ class Compiler
  # sp_Class struct (built-in class id for primitive tags, stored
  # cls_id for OBJ-tagged values).
         if bt_pc == "poly" || bt_pc == "poly?"
+          return "class"
+        end
+ # `.class` on a class/module value -> Class or Module, itself a
+ # class value.
+        if bt_pc == "class"
           return "class"
         end
       end

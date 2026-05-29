@@ -1049,7 +1049,11 @@ class Compiler
     try_len = parts.length - 1
     while try_len >= 1
       candidate = parts[0, try_len].join("_")
-      if module_name_exists(candidate) == 1
+ # A nested constant may live under a module OR a class
+ # (`class Outer; class Inner; end; end` mangles to
+ # `Outer_Inner` just like the module case), so accept either
+ # as the namespace prefix.
+      if module_name_exists(candidate) == 1 || find_class_idx(candidate) >= 0
         best_len = try_len
         try_len = 0
       else
@@ -8622,7 +8626,10 @@ class Compiler
       if @builtin_class_count + i > 0
         line = line + ","
       end
-      line = line + c_string_literal(@cls_names[i])
+ # Store the Ruby-visible name (`Outer::Inner`), not the
+ # C-mangled `Outer_Inner`, so Class#name / #to_s / #inspect
+ # render the proper namespace separator.
+      line = line + c_string_literal(cls_name_to_ruby(@cls_names[i]))
       i = i + 1
     end
     mi = 0
@@ -8630,7 +8637,7 @@ class Compiler
       if @builtin_class_count + @cls_names.length + mi > 0
         line = line + ","
       end
-      line = line + c_string_literal(@module_names[mi])
+      line = line + c_string_literal(cls_name_to_ruby(@module_names[mi]))
       mi = mi + 1
     end
     if total_count == 0
@@ -8645,6 +8652,16 @@ class Compiler
  # a single-int wrapper -- a direct field compare is enough.
     emit_raw("static mrb_bool sp_class_eq(sp_Class a, sp_Class b) __attribute__((unused));")
     emit_raw("static mrb_bool sp_class_eq(sp_Class a, sp_Class b){return a.cls_id == b.cls_id;}")
+ # Module/class discriminator. User modules occupy the top
+ # contiguous id range (builtins, then user classes, then user
+ # modules), so a single threshold compare classifies any
+ # sp_Class value — including dynamic ones held in locals/ivars.
+ # Builtin modules (Kernel/Comparable/...) sit in the builtin
+ # range and read as non-module here; that's fine since the
+ # introspection arms only target user module/class constants.
+    emit_raw("#define SP_USER_MODULE_BASE " + (@builtin_class_count + @cls_names.length).to_s)
+    emit_raw("static mrb_bool sp_class_is_module(sp_Class c) __attribute__((unused));")
+    emit_raw("static mrb_bool sp_class_is_module(sp_Class c){return c.cls_id >= SP_USER_MODULE_BASE;}")
  # parents + flat ancestors tables.
  # Gated on the pre-scan flags (scan_for_class_hierarchy_usage
  # in generate_code) so programs that never reach for
@@ -26289,6 +26306,27 @@ class Compiler
  # is_a? / kind_of? — kind_of? is an exact alias of is_a? in MRI.
  # Both walk the class hierarchy: cname is or inherits from arg0 → TRUE.
     if mname == "is_a?" || mname == "kind_of?"
+ # A class/module value: `Foo.is_a?(Module)` is always true (a
+ # class IS_A Module); `is_a?(Class)` holds only for classes,
+ # not modules. Decided per literal-constant argument; a dynamic
+ # argument falls through to the generic result below.
+      if recv_type == "class"
+        args_id_cls_isa = @nd_arguments[nid]
+        if args_id_cls_isa >= 0
+          a_cls_isa = get_args(args_id_cls_isa)
+          if a_cls_isa.length > 0 && is_static_const_ref(a_cls_isa[0]) == 1
+            arg0_cls_isa = resolve_introspection_arg_name(a_cls_isa[0])
+            if arg0_cls_isa == "Module" || arg0_cls_isa == "Object" || arg0_cls_isa == "Kernel" || arg0_cls_isa == "BasicObject"
+              return "TRUE"
+            end
+            if arg0_cls_isa == "Class"
+              @needs_class_table = 1
+              return "(!sp_class_is_module(" + rc + "))"
+            end
+            return "FALSE"
+          end
+        end
+      end
       if base_type(recv_type) == "encoding"
         arg0_enc_isa = ""
         args_id_enc_isa = @nd_arguments[nid]
@@ -26381,6 +26419,25 @@ class Compiler
       end
       if arg0 == "Hash" && is_hash_type(recv_type) == 1
         return "TRUE"
+      end
+ # A class/module value's exact class is Class (for classes) or
+ # Module (for modules) — never Object/Kernel/a user class.
+      if recv_type == "class"
+        args_id_cls_io = @nd_arguments[nid]
+        if args_id_cls_io >= 0
+          a_cls_io = get_args(args_id_cls_io)
+          if a_cls_io.length > 0 && is_static_const_ref(a_cls_io[0]) == 1
+            if arg0 == "Module"
+              @needs_class_table = 1
+              return "sp_class_is_module(" + rc + ")"
+            end
+            if arg0 == "Class"
+              @needs_class_table = 1
+              return "(!sp_class_is_module(" + rc + "))"
+            end
+            return "FALSE"
+          end
+        end
       end
       if base_type(recv_type) == "encoding"
         if arg0 == "Encoding"
@@ -26625,6 +26682,17 @@ class Compiler
       if mname == "to_s" || mname == "name" || mname == "inspect"
         @needs_class_table = 1
         return "sp_class_to_s(" + rc + ")"
+      end
+ # `.class` on a class/module value -> Class or Module. The
+ # runtime discriminator covers dynamic Class-typed receivers
+ # too, not just static constants.
+      if mname == "class"
+        @needs_class_table = 1
+        bid_mod = builtin_class_id_for_name("Module")
+        bid_cls = builtin_class_id_for_name("Class")
+        if bid_mod >= 0 && bid_cls >= 0
+          return "(sp_class_is_module(" + rc + ") ? ((sp_Class){" + bid_mod.to_s + "LL}) : ((sp_Class){" + bid_cls.to_s + "LL}))"
+        end
       end
  # Module#const_defined?(:X) — static-class + literal-symbol-arg
  # fast path. Spinel emits one C global per user-class constant
