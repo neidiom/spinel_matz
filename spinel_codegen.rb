@@ -21440,6 +21440,18 @@ class Compiler
         return rc
       end
     end
+ # Integer#round(ndigits): round to given precision via runtime
+ # helper. Positive ndigits are a no-op on integers.
+    if mname == "round"
+      if @nd_arguments[nid] >= 0
+        ap = get_args(@nd_arguments[nid])
+        if ap.length > 0
+          arg = compile_arg0(nid)
+          return "sp_int_round(" + rc + ", " + arg + ")"
+        end
+      end
+      return rc
+    end
  # is_a? / kind_of? on a primitive int: resolve at compile time. The
  # arg is a class constant (Integer / Numeric / Comparable / etc.);
  # answer based on Ruby's class hierarchy. Anything not in the int
