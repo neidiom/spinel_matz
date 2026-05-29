@@ -5558,6 +5558,46 @@ class Compiler
     -1
   end
 
+ # 1 if `cn` has a singleton method `mname` — either a synthetic
+ # `<cn>_cls_<mname>` (module_function / top-level form) or an
+ # in-class `def self.<mname>` recorded in @cls_cmeth_names.
+  def cls_singleton_method_exists(cn, mname)
+    if find_method_idx(cn + "_cls_" + mname) >= 0
+      return 1
+    end
+    ci = find_class_idx(cn)
+    if ci >= 0
+      cmnames = @cls_cmeth_names[ci].split(";", -1)
+      ki = 0
+      while ki < cmnames.length
+        if cmnames[ki] == mname
+          return 1
+        end
+        ki = ki + 1
+      end
+    end
+    0
+  end
+
+ # 1 if `mname` is a method every class/module object responds to.
+ # `new`/`allocate` are class-only (a module has no allocator).
+  def const_universal_method?(rcname, mname)
+    if mname == "name" || mname == "to_s" || mname == "inspect" ||
+       mname == "class" || mname == "==" || mname == "!=" ||
+       mname == "===" || mname == "respond_to?" || mname == "is_a?" ||
+       mname == "kind_of?" || mname == "instance_of?" || mname == "hash" ||
+       mname == "freeze" || mname == "frozen?" || mname == "instance_methods" ||
+       mname == "method_defined?" || mname == "ancestors"
+      return 1
+    end
+    if mname == "new" || mname == "allocate"
+      if find_class_idx(rcname) >= 0 && module_name_exists(rcname) == 0
+        return 1
+      end
+    end
+    0
+  end
+
  # Walk the AST for `Module.accessor = RHS` writes where
  # (Module, accessor) was registered in `collect_module` as a
  # singleton accessor. Accumulates the set of distinct
@@ -25503,6 +25543,37 @@ class Compiler
                 return hit == 1 ? "TRUE" : "FALSE"
               end
             end
+          end
+        end
+      end
+ # Foo.respond_to?(:sym) on a class/module constant. CRuby checks
+ # the receiver's singleton method set (def self.m / module_function
+ # / class << self accessors), not its instance methods. The literal
+ # symbol/string case is decided at compile time; a non-literal arg
+ # falls through to the generic path.
+      if mname == "respond_to?"
+        args_id_rt = @nd_arguments[nid]
+        if args_id_rt >= 0
+          a_rt = get_args(args_id_rt)
+          if a_rt.length > 0 && (@nd_type[a_rt[0]] == "SymbolNode" || @nd_type[a_rt[0]] == "StringNode")
+            qname = @nd_content[a_rt[0]]
+ # `attr_accessor :x` in `class << self` registers the reader
+ # key only; the writer `x=` shares the same slot, so strip a
+ # trailing `=` before the accessor lookup.
+            qbase = qname
+            if qbase.length > 0 && qbase[qbase.length - 1, 1] == "="
+              qbase = qbase[0, qbase.length - 1]
+            end
+            if find_module_acc_idx(rcname + "." + qbase) >= 0
+              return "TRUE"
+            end
+            if cls_singleton_method_exists(rcname, qname) == 1
+              return "TRUE"
+            end
+            if const_universal_method?(rcname, qname) == 1
+              return "TRUE"
+            end
+            return "FALSE"
           end
         end
       end
