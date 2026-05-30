@@ -273,6 +273,10 @@ class Compiler
  # Only methods with a splat get an entry; lookup returns -1 otherwise.
     @cls_rest_keys = "".split(",", -1)
     @cls_rest_idxs = []
+ # Synthetic module class methods (`<Mod>_cls_<name>`) that no
+ # in-unit call site reaches; stubbed at emit time so their bodies
+ # don't warn (#1062). Computed by compute_dead_module_class_methods.
+    @dead_mod_cls_meths = "".split(",", -1)
  # Mirror of @meth_param_empty for class methods. Pipe-separated by
  # method, comma-separated by param. .
     @cls_meth_ptypes_empty = "".split(",", -1)
@@ -24738,6 +24742,7 @@ class Compiler
     scan_toplevel_ivars(@root_id)
     compute_live_cls_methods
     compute_live_instance_methods
+    compute_dead_module_class_methods
     @analysis_frozen = 1
     precompute_all_scope_decls
  # Widen LV slots whose declared *_ptr_array gets a wider rhs
@@ -27172,6 +27177,180 @@ class Compiler
     while ck < cs.length
       collect_used_method_names(cs[ck], acc)
       ck = ck + 1
+    end
+  end
+
+ # 1 if `cn` is a declaration call whose symbol/string arguments name
+ # methods being *declared*, not *called* (e.g. `module_function :foo`,
+ # `private :foo`). Those args must not count as call sites.
+  def is_decl_modifier_call(cn)
+    if cn == "module_function" || cn == "private" || cn == "public" ||
+       cn == "protected" || cn == "private_class_method" ||
+       cn == "public_class_method" || cn == "module_eval" ||
+       cn == "private_constant"
+      return 1
+    end
+    0
+  end
+
+ # Like collect_used_method_names but counts only CallNode method
+ # names plus reflection symbols (method/send/__send__/respond_to?),
+ # NOT bare declaration symbols. So `module_function :fail!` does not
+ # make `fail!` look "called" — letting an uncalled module function
+ # be recognized as dead. Reflection-symbol args are still recursed
+ # (their symbols collected) so `send(:foo)` keeps `foo` live.
+  def collect_called_names(nid, acc)
+    if nid < 0
+      return
+    end
+    t = @nd_type[nid]
+ # Don't descend into a `def` body — calls there only count when the
+ # method is itself reached (the closure walks reachable bodies
+ # explicitly); descending would make every method's calls look
+ # top-level-reachable and defeat the transitive analysis. But DO
+ # collect calls in its default-param values: those run at the call
+ # site whenever the method is invoked, so `def f(x = Foo.bar)` must
+ # keep Foo.bar conservatively reachable (else it'd be false-stubbed).
+    if t == "DefNode"
+      collect_called_names(@nd_parameters[nid], acc)
+      return
+    end
+    if t == "CallNode"
+      cn = @nd_name[nid]
+      if cn != "" && not_in(cn, acc) == 1
+        acc.push(cn)
+      end
+      if is_decl_modifier_call(cn) == 1
+ # Recurse into non-symbol/string args only (e.g. `private def
+ # foo; bar; end` still collects `bar`); skip the declared names.
+        aid_d = @nd_arguments[nid]
+        if aid_d >= 0
+          dargs = get_args(aid_d)
+          di = 0
+          while di < dargs.length
+            if @nd_type[dargs[di]] != "SymbolNode" && @nd_type[dargs[di]] != "StringNode"
+              collect_called_names(dargs[di], acc)
+            end
+            di = di + 1
+          end
+        end
+        return
+      end
+    end
+    if t == "SymbolNode"
+      sv = @nd_content[nid]
+      if sv != "" && not_in(sv, acc) == 1
+        acc.push(sv)
+      end
+    end
+    cs = []
+    push_child_ids(nid, cs)
+    ck = 0
+    while ck < cs.length
+      collect_called_names(cs[ck], acc)
+      ck = ck + 1
+    end
+  end
+
+ # Identify synthetic module class methods (`<Module>_cls_<name>` in
+ # @meth_names) that are never actually called and stub them at emit
+ # time, so a named-`module_function` library method that no in-unit
+ # caller reaches (e.g. brass'"'"'s Kernel#fail!) doesn'"'"'t emit
+ # "cannot resolve ... on int" warnings for code that won'"'"'t run.
+ # Mirrors the cls-cmeth / instance-method DCE; conservative
+ # (any CallNode naming the bare method keeps it live). Issue #1062.
+  def mf_bare_name(full)
+    cm = full.index("_cls_")
+    if cm != nil && cm >= 0
+      return full[(cm + 5), full.length - (cm + 5)]
+    end
+    full
+  end
+
+ # Collect the called-names of every method (any kind) whose bare
+ # name is `name`, into the worklist. Over-approximates (a name
+ # defined in several classes walks all of them) — that only keeps
+ # MORE methods live, never produces a false-dead.
+  def collect_calls_from_methods_named(name, work)
+    i = 0
+    while i < @meth_names.length
+      if mf_bare_name(@meth_names[i]) == name && i < @meth_body_ids.length
+        collect_called_names(@meth_body_ids[i], work)
+      end
+      i = i + 1
+    end
+    ci = 0
+    while ci < @cls_names.length
+      mnames = @cls_meth_names[ci].split(";", -1)
+      bodies = @cls_meth_bodies[ci].split(";", -1)
+      j = 0
+      while j < mnames.length
+        if mnames[j] == name && j < bodies.length
+          bid = bodies[j].to_i
+          if bid >= 0
+            collect_called_names(bid, work)
+          end
+        end
+        j = j + 1
+      end
+      cmnames = @cls_cmeth_names[ci].split(";", -1)
+      cbodies = @cls_cmeth_bodies[ci].split(";", -1)
+      cj = 0
+      while cj < cmnames.length
+        if cmnames[cj] == name && cj < cbodies.length
+          cbid = cbodies[cj].to_i
+          if cbid >= 0
+            collect_called_names(cbid, work)
+          end
+        end
+        cj = cj + 1
+      end
+      ci = ci + 1
+    end
+  end
+
+  def compute_dead_module_class_methods
+    @dead_mod_cls_meths = "".split(",", -1)
+ # Transitive reachability from the program entry (top-level code +
+ # detached instance_eval bodies). Only calls inside REACHABLE method
+ # bodies count — so a module function reached only from other
+ # uncalled module functions (brass: assert -> fail!, neither called
+ # from top level) is correctly dead. Names dispatched implicitly
+ # (operators, to_s/inspect via puts/interp, etc.) are seeded live.
+    reachable = "".split(",", -1)
+ # Seed the worklist (not just the reachable set) with implicitly-
+ # dispatched names so the closure actually WALKS their bodies — an
+ # `initialize` calling `Driver.load` must propagate that call.
+    work = "initialize;to_s;inspect;each;[];[]=;==;!=;<=>;hash;call;to_a;to_i;to_proc".split(";", -1)
+    collect_called_names(@root_id, work)
+    ie = 0
+    while ie < @ieval_body_ids.length
+      collect_called_names(@ieval_body_ids[ie], work)
+      ie = ie + 1
+    end
+    wi = 0
+    while wi < work.length
+      nm = work[wi]
+      wi = wi + 1
+      if not_in(nm, reachable) == 0
+        next
+      end
+      reachable.push(nm)
+      collect_calls_from_methods_named(nm, work)
+    end
+ # Stub synthetic module class methods whose bare name is unreachable.
+    mi = 0
+    while mi < @meth_names.length
+      nm2 = @meth_names[mi]
+      ci_marker = nm2.index("_cls_")
+      if ci_marker != nil && ci_marker >= 0
+        prefix = nm2[0, ci_marker]
+        bare = nm2[(ci_marker + 5), nm2.length - (ci_marker + 5)]
+        if bare != "" && module_name_exists(prefix) == 1 && not_in(bare, reachable) == 1
+          @dead_mod_cls_meths.push(nm2)
+        end
+      end
+      mi = mi + 1
     end
   end
 
@@ -30707,6 +30886,7 @@ class Compiler
     buf = ir_emit_sa(buf, "@cls_meth_bodies", @cls_meth_bodies)
     buf = ir_emit_sa(buf, "@cls_rest_keys", @cls_rest_keys)
     buf = ir_emit_ia(buf, "@cls_rest_idxs", @cls_rest_idxs)
+    buf = ir_emit_sa(buf, "@dead_mod_cls_meths", @dead_mod_cls_meths)
     buf = ir_emit_sa(buf, "@cls_meth_defaults", @cls_meth_defaults)
     buf = ir_emit_sa(buf, "@cls_meth_ptypes_empty", @cls_meth_ptypes_empty)
     buf = ir_emit_sa(buf, "@cls_meth_prep_chain", @cls_meth_prep_chain)

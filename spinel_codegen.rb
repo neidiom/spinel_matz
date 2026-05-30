@@ -301,6 +301,9 @@ class Compiler
  # see the analyze-side comment. Used to pack trailing call args.
     @cls_rest_keys = "".split(",", -1)
     @cls_rest_idxs = []
+ # Synthetic module class methods that are dead (no in-unit caller);
+ # stubbed in emit_toplevel_method so their bodies don't warn (#1062).
+    @dead_mod_cls_meths = "".split(",", -1)
     @cls_meth_defaults = "".split(",", -1)
  # Mirror of @meth_param_empty for class methods. Pipe-separated by
  # method, comma-separated by param. .
@@ -12123,7 +12126,19 @@ class Compiler
     end
 
     bid = @meth_body_ids[mi]
-    if bid >= 0
+    if not_in(mfullname, @dead_mod_cls_meths) == 0
+ # Dead synthetic module class method (#1062): no in-unit call site
+ # reaches it (e.g. a named-`module_function` library method like
+ # Kernel#fail! that nothing in this file calls). Emit a stub
+ # rather than analyzing its body, which would otherwise warn about
+ # unimplemented dynamic patterns in code that never runs. Mirrors
+ # the cls-cmeth / instance-method DCE stub.
+      j = 0
+      while j < pnames.length
+        emit("  (void)lv_" + pnames[j] + ";")
+        j = j + 1
+      end
+    elsif bid >= 0
       declare_method_locals(bid, pnames)
       if @in_gc_scope == 0
         if @needs_gc == 1
@@ -47408,6 +47423,8 @@ class Compiler
       @cls_meth_returns = val
     elsif name == "@cls_rest_keys"
       @cls_rest_keys = val
+    elsif name == "@dead_mod_cls_meths"
+      @dead_mod_cls_meths = val
     elsif name == "@cls_meth_bodies"
       @cls_meth_bodies = val
     elsif name == "@cls_meth_defaults"
