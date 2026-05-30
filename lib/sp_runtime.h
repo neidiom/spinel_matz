@@ -130,34 +130,36 @@ static inline mrb_bool sp_int_mul_overflow_p(mrb_int a, mrb_int b, mrb_int *r) {
   return __builtin_mul_overflow(a, b, r);
 }
 #else
-/* Portable fallback. mrb_int is int64_t (see typedef above), so the
-   add / sub fallbacks compute in mrb_uint (= uint64_t) -- unsigned
-   integer overflow is well-defined wrap-around in C -- and detect
-   signed overflow via the sign-bit XOR trick. Mul checks bounds
-   before multiplying because the 128-bit intermediate isn't
-   portable. */
-#define SP_INT_OVERFLOW_MASK ((mrb_uint)1 << 63)
+/* Portable fallback for compilers lacking __builtin_*_overflow.
+   mrb_int is pointer-width (intptr_t), so compute in uintptr_t --
+   unsigned overflow is well-defined wrap-around in C -- and detect
+   signed overflow via the sign-bit XOR trick at the *correct* width
+   (the sign bit is mrb_int's top bit: 63 on 64-bit, 31 on 32-bit).
+   Bounds use INTPTR_MAX/MIN, not the int64 MRB_INT_* macros, so this
+   path is self-contained and width-correct. Mul checks bounds before
+   multiplying because a 2x-width intermediate isn't portable. */
+#define SP_INT_OVF_SIGN ((uintptr_t)1 << (sizeof(mrb_int) * 8 - 1))
 static inline mrb_bool sp_int_add_overflow_p(mrb_int a, mrb_int b, mrb_int *r) {
-  mrb_uint x = (mrb_uint)a, y = (mrb_uint)b, z = x + y;
+  uintptr_t x = (uintptr_t)a, y = (uintptr_t)b, z = x + y;
   *r = (mrb_int)z;
-  return !!(((x ^ z) & (y ^ z)) & SP_INT_OVERFLOW_MASK);
+  return !!(((x ^ z) & (y ^ z)) & SP_INT_OVF_SIGN);
 }
 static inline mrb_bool sp_int_sub_overflow_p(mrb_int a, mrb_int b, mrb_int *r) {
-  mrb_uint x = (mrb_uint)a, y = (mrb_uint)b, z = x - y;
+  uintptr_t x = (uintptr_t)a, y = (uintptr_t)b, z = x - y;
   *r = (mrb_int)z;
-  return !!(((x ^ z) & (~y ^ z)) & SP_INT_OVERFLOW_MASK);
+  return !!(((x ^ z) & (~y ^ z)) & SP_INT_OVF_SIGN);
 }
 static inline mrb_bool sp_int_mul_overflow_p(mrb_int a, mrb_int b, mrb_int *r) {
-  if (a > 0 && b > 0 && a > MRB_INT_MAX / b) { *r = a * b; return TRUE; }
-  if (a < 0 && b > 0 && a < MRB_INT_MIN / b) { *r = a * b; return TRUE; }
-  if (a > 0 && b < 0 && b < MRB_INT_MIN / a) { *r = a * b; return TRUE; }
-  if (a < 0 && b < 0 && (a <= MRB_INT_MIN || b <= MRB_INT_MIN || -a > MRB_INT_MAX / -b)) {
+  if (a > 0 && b > 0 && a > INTPTR_MAX / b) { *r = a * b; return TRUE; }
+  if (a < 0 && b > 0 && a < INTPTR_MIN / b) { *r = a * b; return TRUE; }
+  if (a > 0 && b < 0 && b < INTPTR_MIN / a) { *r = a * b; return TRUE; }
+  if (a < 0 && b < 0 && (a <= INTPTR_MIN || b <= INTPTR_MIN || -a > INTPTR_MAX / -b)) {
     *r = a * b; return TRUE;
   }
   *r = a * b;
   return FALSE;
 }
-#undef SP_INT_OVERFLOW_MASK
+#undef SP_INT_OVF_SIGN
 #endif
 
 /* Three modes selected by `--int-overflow=raise|wrap|promote` on the
