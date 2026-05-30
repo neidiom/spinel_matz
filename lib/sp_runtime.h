@@ -1213,6 +1213,14 @@ static const char*sp_float_to_s(mrb_float f){
   out[o]=0;sp_str_set_len(out,(size_t)o);return out;
 }
 #define sp_float_inspect sp_float_to_s
+/* Float#ceil/floor/round/truncate with non-literal ndigits: return
+   mrb_int when ndigits <= 0 (CRuby returns Integer), mrb_float
+   otherwise.  The analyzer assumes "int" for non-literal ndigits
+   so these always return mrb_int — a conservative narrowing. */
+static mrb_int sp_flt_ceil_nd(mrb_float v,mrb_int nd){if(nd<=0){double f=pow(10,-(double)nd);return(mrb_int)ceil(v/f);}return(mrb_int)({double _f=pow(10,(double)nd);ceil(v*_f)/_f;});}
+static mrb_int sp_flt_floor_nd(mrb_float v,mrb_int nd){if(nd<=0){double f=pow(10,-(double)nd);return(mrb_int)floor(v/f);}return(mrb_int)({double _f=pow(10,(double)nd);floor(v*_f)/_f;});}
+static mrb_int sp_flt_round_nd(mrb_float v,mrb_int nd){if(nd<=0){double f=pow(10,-(double)nd);return(mrb_int)round(v/f);}return(mrb_int)({double _f=pow(10,(double)nd);round(v*_f)/_f;});}
+static mrb_int sp_flt_truncate_nd(mrb_float v,mrb_int nd){if(nd<=0){double f=pow(10,-(double)nd);return(mrb_int)trunc(v/f);}return(mrb_int)({double _f=pow(10,(double)nd);trunc(v*_f)/_f;});}
 /* String#inspect: wrap in double quotes and escape \, ", \n, \t, \r,
    plus any non-printable byte as \xNN. Output is always ASCII-safe. */
 static const char*sp_str_inspect(const char*s){if(!s){char*r=sp_str_alloc_raw(4);r[0]='n';r[1]='i';r[2]='l';r[3]=0;return r;}size_t sl=sp_str_byte_len(s);size_t cap=sl*4+3;char*r=sp_str_alloc_raw(cap);size_t o=0;r[o++]='"';for(size_t i=0;i<sl;i++){unsigned char c=(unsigned char)s[i];if(c=='\\'||c=='"'){r[o++]='\\';r[o++]=c;}else if(c=='\n'){r[o++]='\\';r[o++]='n';}else if(c=='\t'){r[o++]='\\';r[o++]='t';}else if(c=='\r'){r[o++]='\\';r[o++]='r';}else if(c<0x20||c==0x7f){snprintf(r+o,5,"\\x%02X",c);o+=4;}else{r[o++]=(char)c;}}r[o++]='"';r[o]=0;sp_str_set_len(r,o);return r;}

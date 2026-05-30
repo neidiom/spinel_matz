@@ -21956,33 +21956,57 @@ class Compiler
     if mname == "ceil"
       if @nd_arguments[nid] >= 0
         ap = get_args(@nd_arguments[nid])
-        if ap.length > 0 && @nd_type[ap[0]] == "IntegerNode" && @nd_value[ap[0]].to_i == 0
-          return "(mrb_int)ceil(" + rc + ")"
+        if ap.length > 0
+          if @nd_type[ap[0]] == "IntegerNode"
+            nd = @nd_value[ap[0]].to_i
+            if nd <= 0
+              arg = compile_arg0(nid)
+              return "(mrb_int)({ double _f = pow(10, " + arg + "); ceil((" + rc + ") * _f) / _f; })"
+            end
+            arg = compile_arg0(nid)
+            return "({ double _f = pow(10, " + arg + "); ceil((" + rc + ") * _f) / _f; })"
+          end
+          arg = compile_arg0(nid)
+          return "sp_flt_ceil_nd((" + rc + "), " + arg + ")"
         end
-        arg = compile_arg0(nid)
-        return "({ double _f = pow(10, " + arg + "); ceil((" + rc + ") * _f) / _f; })"
       end
       return "(mrb_int)ceil(" + rc + ")"
     end
     if mname == "floor"
       if @nd_arguments[nid] >= 0
         ap = get_args(@nd_arguments[nid])
-        if ap.length > 0 && @nd_type[ap[0]] == "IntegerNode" && @nd_value[ap[0]].to_i == 0
-          return "(mrb_int)floor(" + rc + ")"
+        if ap.length > 0
+          if @nd_type[ap[0]] == "IntegerNode"
+            nd = @nd_value[ap[0]].to_i
+            if nd <= 0
+              arg = compile_arg0(nid)
+              return "(mrb_int)({ double _f = pow(10, " + arg + "); floor((" + rc + ") * _f) / _f; })"
+            end
+            arg = compile_arg0(nid)
+            return "({ double _f = pow(10, " + arg + "); floor((" + rc + ") * _f) / _f; })"
+          end
+          arg = compile_arg0(nid)
+          return "sp_flt_floor_nd((" + rc + "), " + arg + ")"
         end
-        arg = compile_arg0(nid)
-        return "({ double _f = pow(10, " + arg + "); floor((" + rc + ") * _f) / _f; })"
       end
       return "(mrb_int)floor(" + rc + ")"
     end
     if mname == "round"
       if @nd_arguments[nid] >= 0
         ap = get_args(@nd_arguments[nid])
-        if ap.length > 0 && @nd_type[ap[0]] == "IntegerNode" && @nd_value[ap[0]].to_i == 0
-          return "(mrb_int)round(" + rc + ")"
+        if ap.length > 0
+          if @nd_type[ap[0]] == "IntegerNode"
+            nd = @nd_value[ap[0]].to_i
+            if nd <= 0
+              arg = compile_arg0(nid)
+              return "(mrb_int)({ double _f = pow(10, " + arg + "); round((" + rc + ") * _f) / _f; })"
+            end
+            arg = compile_arg0(nid)
+            return "({ double _f = pow(10, " + arg + "); round((" + rc + ") * _f) / _f; })"
+          end
+          arg = compile_arg0(nid)
+          return "sp_flt_round_nd((" + rc + "), " + arg + ")"
         end
-        arg = compile_arg0(nid)
-        return "({ double _f = pow(10, " + arg + "); round((" + rc + ") * _f) / _f; })"
       end
       return "(mrb_int)round(" + rc + ")"
     end
@@ -22008,8 +22032,20 @@ class Compiler
     end
     if mname == "truncate"
       if @nd_arguments[nid] >= 0
-        arg = compile_arg0(nid)
-        return "({ double _f = pow(10, " + arg + "); trunc((" + rc + ") * _f) / _f; })"
+        ap = get_args(@nd_arguments[nid])
+        if ap.length > 0
+          if @nd_type[ap[0]] == "IntegerNode"
+            nd = @nd_value[ap[0]].to_i
+            if nd <= 0
+              arg = compile_arg0(nid)
+              return "(mrb_int)({ double _f = pow(10, " + arg + "); trunc((" + rc + ") * _f) / _f; })"
+            end
+            arg = compile_arg0(nid)
+            return "({ double _f = pow(10, " + arg + "); trunc((" + rc + ") * _f) / _f; })"
+          end
+          arg = compile_arg0(nid)
+          return "sp_flt_truncate_nd((" + rc + "), " + arg + ")"
+        end
       end
       return "(mrb_int)trunc(" + rc + ")"
     end

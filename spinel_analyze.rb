@@ -4550,14 +4550,20 @@ class Compiler
     if mname == "ceil" || mname == "floor" || mname == "round" || mname == "truncate"
       if recv >= 0 && infer_type(recv) == "float"
         if @nd_arguments[nid] >= 0
- # `round(0)` (and ceil/floor/truncate(0)) match the no-arg
- # form: CRuby returns Integer when the precision arg is the
- # literal 0. Other precisions stay Float.
+ # CRuby returns Integer when ndigits <= 0, Float only when
+ # ndigits > 0.  Check the literal value at compile time; for
+ # non-literal args assume <= 0 (the common case) and return
+ # "int" — worst case a float value gets narrowed.
           ap_rd = get_args(@nd_arguments[nid])
-          if ap_rd.length > 0 && @nd_type[ap_rd[0]] == "IntegerNode" && @nd_value[ap_rd[0]].to_i == 0
+          if ap_rd.length > 0
+            if @nd_type[ap_rd[0]] == "IntegerNode"
+              if @nd_value[ap_rd[0]].to_i <= 0
+                return "int"
+              end
+              return "float"
+            end
             return "int"
           end
-          return "float"
         end
         return "int"
       end
