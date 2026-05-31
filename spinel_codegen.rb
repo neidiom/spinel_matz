@@ -26421,6 +26421,20 @@ class Compiler
         if mname == "extname"
           return "sp_file_extname(" + compile_arg0(nid) + ")"
         end
+ # File.expand_path(path[, base]) -- absolute path via pure-string
+ # expansion (no filesystem access). The 1-arg form defaults base to
+ # the cwd (NULL); the 2-arg form expands `path` against `base`.
+        if mname == "expand_path"
+          args_id_ep = @nd_arguments[nid]
+          if args_id_ep >= 0
+            a_ep = get_args(args_id_ep)
+            if a_ep.length >= 2
+              return "sp_file_expand_path(" + compile_expr(a_ep[0]) + ", " + compile_expr(a_ep[1]) + ")"
+            elsif a_ep.length == 1
+              return "sp_file_expand_path(" + compile_expr(a_ep[0]) + ", NULL)"
+            end
+          end
+        end
  # `File.open(path, mode)` without a block — returns a GC-managed
  # sp_File * handle. The block form is statement-only (handled in
  # compile_file_open_call_stmt) and the expression context only

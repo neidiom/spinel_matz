@@ -6688,7 +6688,7 @@ class Compiler
           if mname == "join"
             return "string"
           end
-          if mname == "basename" || mname == "dirname" || mname == "extname"
+          if mname == "basename" || mname == "dirname" || mname == "extname" || mname == "expand_path"
             return "string"
           end
  # `File.open(path, mode)` without a block returns an sp_File *

@@ -3494,6 +3494,81 @@ static const char *sp_dir_pwd(void) {
   return buf;
 }
 
+/* File.expand_path(path[, base]) -- CRuby-compatible pure-string
+   expansion (does NOT require the path to exist). A leading `~` / `~/`
+   becomes $HOME; a relative path is resolved against `base` (itself
+   expanded; NULL means the current working directory); and `.` / `..` /
+   duplicate-slash segments are collapsed. `~user` is unsupported and is
+   left as-is. */
+static const char *sp_file_expand_path(const char *path, const char *base) {
+  char raw[8192];
+  char cwd[4096];
+  const char *home = getenv("HOME");
+  if (!home) home = "";
+  if (!path) path = "";
+
+  /* The `%.4000s` precision caps each component so the compiler can
+     prove the combined output (<= 8001) fits in the 8192 buffer -- this
+     silences -Wformat-truncation (an error under the test harness's
+     -Werror). 4000 chars/component is well past PATH_MAX, so real paths
+     never truncate. */
+  if (path[0] == '~' && (path[1] == '\0' || path[1] == '/')) {
+    snprintf(raw, sizeof(raw), "%.4000s%.4000s", home, path + 1);
+  } else if (path[0] == '/') {
+    snprintf(raw, sizeof(raw), "%.4000s", path);
+  } else {
+    char basebuf[8192];
+    const char *b;
+    if (base && base[0]) {
+      if (base[0] == '~' && (base[1] == '\0' || base[1] == '/')) {
+        snprintf(basebuf, sizeof(basebuf), "%.4000s%.4000s", home, base + 1);
+        b = basebuf;
+      } else if (base[0] == '/') {
+        b = base;
+      } else {
+        if (!getcwd(cwd, sizeof(cwd))) cwd[0] = 0;
+        snprintf(basebuf, sizeof(basebuf), "%.4000s/%.4000s", cwd, base);
+        b = basebuf;
+      }
+    } else {
+      if (!getcwd(cwd, sizeof(cwd))) cwd[0] = 0;
+      b = cwd;
+    }
+    snprintf(raw, sizeof(raw), "%.4000s/%.4000s", b, path);
+  }
+
+  /* Normalize: walk segments, collapsing `.`/`..`/`//`. seg_start[k]
+     records the output length to roll back to when a `..` pops the
+     k-th kept segment. */
+  size_t rawlen = strlen(raw);
+  char *out = sp_str_alloc(rawlen + 1);
+  size_t seg_start[1024];
+  int nseg = 0;
+  size_t olen = 0;
+  out[olen++] = '/';
+  const char *p = raw;
+  while (*p) {
+    if (*p == '/') { p++; continue; }
+    const char *q = p;
+    while (*q && *q != '/') q++;
+    size_t slen = (size_t)(q - p);
+    if (slen == 1 && p[0] == '.') {
+      /* current dir -- skip */
+    } else if (slen == 2 && p[0] == '.' && p[1] == '.') {
+      if (nseg > 0) { nseg--; olen = seg_start[nseg]; }
+    } else {
+      size_t mark = olen;
+      if (olen > 1) out[olen++] = '/';
+      memcpy(out + olen, p, slen);
+      olen += slen;
+      if (nseg < 1024) seg_start[nseg++] = mark;
+    }
+    p = q;
+  }
+  out[olen] = 0;
+  return out;
+}
+
 /* Read a file's bytes into a fresh IntArray. Distinct from
    `sp_str_bytes(sp_file_read(path))` because plain sp_str_bytes uses
    null-termination and stops at the first 0x00 byte — wrong for
