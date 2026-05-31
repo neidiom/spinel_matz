@@ -40255,6 +40255,11 @@ class Compiler
     if at == "int"
       return "sp_int_to_s(" + val + ")"
     end
+    if at == "int?"
+ # Nullable int (e.g. `0.nonzero?`, `[].first`): print "nil" for the
+ # SP_INT_NIL sentinel, the decimal otherwise.
+      return "sp_int_opt_inspect(" + val + ")"
+    end
     if at == "float"
       return "sp_float_inspect(" + val + ")"
     end
