@@ -87,6 +87,56 @@ static void pk_append(char **buf, size_t *len, size_t *cap, const char *src, siz
   *len += n;
 }
 
+/* Encode codepoint `v` as UTF-8 (the `U` directive) into out[0..5].
+   Mirrors CRuby's permissive scheme: up to 6 bytes for values through
+   0x7FFFFFFF. Negative / out-of-range values encode nothing (CRuby
+   raises RangeError; spinel has no exception path here). Returns the
+   byte count written. */
+static int pk_utf8(unsigned char *out, int64_t v) {
+  if (v < 0) return 0;
+  uint64_t uv = (uint64_t)v;
+  if (uv <= 0x7F) {
+    out[0] = (unsigned char)uv;
+    return 1;
+  }
+  if (uv <= 0x7FF) {
+    out[0] = (unsigned char)(0xC0 | (uv >> 6));
+    out[1] = (unsigned char)(0x80 | (uv & 0x3F));
+    return 2;
+  }
+  if (uv <= 0xFFFF) {
+    out[0] = (unsigned char)(0xE0 | (uv >> 12));
+    out[1] = (unsigned char)(0x80 | ((uv >> 6) & 0x3F));
+    out[2] = (unsigned char)(0x80 | (uv & 0x3F));
+    return 3;
+  }
+  if (uv <= 0x1FFFFF) {
+    out[0] = (unsigned char)(0xF0 | (uv >> 18));
+    out[1] = (unsigned char)(0x80 | ((uv >> 12) & 0x3F));
+    out[2] = (unsigned char)(0x80 | ((uv >> 6) & 0x3F));
+    out[3] = (unsigned char)(0x80 | (uv & 0x3F));
+    return 4;
+  }
+  if (uv <= 0x3FFFFFF) {
+    out[0] = (unsigned char)(0xF8 | (uv >> 24));
+    out[1] = (unsigned char)(0x80 | ((uv >> 18) & 0x3F));
+    out[2] = (unsigned char)(0x80 | ((uv >> 12) & 0x3F));
+    out[3] = (unsigned char)(0x80 | ((uv >> 6) & 0x3F));
+    out[4] = (unsigned char)(0x80 | (uv & 0x3F));
+    return 5;
+  }
+  if (uv <= 0x7FFFFFFF) {
+    out[0] = (unsigned char)(0xFC | (uv >> 30));
+    out[1] = (unsigned char)(0x80 | ((uv >> 24) & 0x3F));
+    out[2] = (unsigned char)(0x80 | ((uv >> 18) & 0x3F));
+    out[3] = (unsigned char)(0x80 | ((uv >> 12) & 0x3F));
+    out[4] = (unsigned char)(0x80 | ((uv >> 6) & 0x3F));
+    out[5] = (unsigned char)(0x80 | (uv & 0x3F));
+    return 6;
+  }
+  return 0;
+}
+
 static int64_t pk_parse_count(const char **pp) {
   const char *p = *pp;
   if (*p == '*') { *pp = p + 1; return -1; }
@@ -184,6 +234,12 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {
           pk_append(&buf, &len, &cap, tmp, 1);
           idx--;
           break;
+        case 'U': {
+          unsigned char ub[6];
+          int ulen = pk_utf8(ub, v);
+          pk_append(&buf, &len, &cap, (const char *)ub, (size_t)ulen);
+          break;
+        }
         default:
           break;
       }
@@ -270,6 +326,12 @@ const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {
           pk_append(&buf, &len, &cap, tmp, 1);
           idx--;
           break;
+        case 'U': {
+          unsigned char ub[6];
+          int ulen = pk_utf8(ub, v);
+          pk_append(&buf, &len, &cap, (const char *)ub, (size_t)ulen);
+          break;
+        }
         default:
           break;
       }
